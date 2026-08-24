@@ -144,7 +144,7 @@ function MainApp() {
       )}
 
       {/* Main Content Area */}
-      <main className={`flex-1 min-w-0 ${!isMobileActiveChat ? 'pb-20 md:pb-0' : ''} overflow-y-auto`}>
+      <main className={`flex-1 min-w-0 ${isMobileActiveChat ? 'h-[100dvh] overflow-hidden' : 'pb-20 md:pb-0 overflow-y-auto'}`}>
         {/* On Mobile: When active chat is opened, show full-screen ChatRoomView */}
         {isMobileActiveChat && activeChatId ? (
           <ChatRoomView

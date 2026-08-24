@@ -141,8 +141,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
   return (
     <div
-      className={`flex flex-col h-full bg-white dark:bg-[#121622] ${
-        isEmbedded ? 'rounded-2xl border border-slate-200/90 dark:border-slate-800 overflow-hidden' : 'h-[calc(100vh-4rem)] md:h-screen'
+      className={`flex flex-col bg-white dark:bg-[#121622] ${
+        isEmbedded
+          ? 'h-full rounded-2xl border border-slate-200/90 dark:border-slate-800 overflow-hidden'
+          : 'fixed inset-0 z-50 md:relative md:inset-auto md:z-auto h-[100dvh] w-full overflow-hidden'
       }`}
     >
       {/* Chat Room Header */}
@@ -328,8 +330,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Bottom Message Input */}
-      <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#151b28] relative shrink-0">
+      {/* Bottom Message Input (Sticky to bottom) */}
+      <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#151b28] sticky bottom-0 z-20 shrink-0">
         {/* Quick Emoji Bar */}
         {showEmojiPicker && (
           <div className="absolute bottom-full left-4 mb-2 p-2 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
