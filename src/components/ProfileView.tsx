@@ -147,9 +147,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       user.bio = bio.trim();
       onProfileUpdated?.({ name: name.trim(), bio: bio.trim() });
       showToast('Profile details saved successfully!', 'success');
-    } catch (err) {
+    } catch (err: unknown) {
       console.error(err);
-      showToast('Failed to save profile changes.', 'error');
+      const msg = err instanceof Error ? err.message : 'Failed to save profile changes.';
+      showToast(msg, 'error');
     } finally {
       setIsSaving(false);
     }

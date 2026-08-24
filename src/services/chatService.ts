@@ -147,7 +147,30 @@ export async function getOrCreateChatConversation(
   };
 
   await setDoc(chatDocRef, {
-    ...newChat,
+    id: chatId,
+    participantIds: [currentUser.uid, otherUser.uid],
+    participants: {
+      [currentUser.uid]: {
+        name: currentUser.name,
+        chatCode: currentUser.chatCode,
+        photoURL: currentUser.photoURL || null,
+        avatarColor: currentUser.avatarColor,
+        avatarIcon: currentUser.avatarIcon
+      },
+      [otherUser.uid]: {
+        name: otherUser.name,
+        chatCode: otherUser.chatCode,
+        photoURL: otherUser.photoURL || null,
+        avatarColor: otherUser.avatarColor,
+        avatarIcon: otherUser.avatarIcon
+      }
+    },
+    unreadCounts: {
+      [currentUser.uid]: 0,
+      [otherUser.uid]: 0
+    },
+    createdAt: newChat.createdAt,
+    updatedAt: newChat.updatedAt,
     createdAtTimestamp: serverTimestamp(),
     updatedAtTimestamp: serverTimestamp()
   });

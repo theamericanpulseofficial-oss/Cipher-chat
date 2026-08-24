@@ -125,7 +125,16 @@ export async function signInWithGoogle(): Promise<UserProfile> {
   };
 
   await setDoc(userDocRef, {
-    ...profile,
+    uid: profile.uid,
+    name: profile.name,
+    chatCode: profile.chatCode,
+    email: profile.email,
+    photoURL: user.photoURL || null,
+    avatarColor: profile.avatarColor,
+    avatarIcon: profile.avatarIcon,
+    createdAt: profile.createdAt,
+    lastSeen: profile.lastSeen,
+    bio: profile.bio,
     normalizedName: displayName.toLowerCase(),
     createdAtTimestamp: serverTimestamp()
   });
@@ -151,13 +160,16 @@ export async function registerUser(name: string, password: string, photoURL?: st
 
   const normalizedName = trimmedName.toLowerCase();
 
-  // Check if username is already registered in Firestore
+  // Check if username is already registered in Firestore (case-insensitive check)
   const usersRef = collection(db, 'users');
   const nameQuery = query(usersRef, where('normalizedName', '==', normalizedName));
   const nameSnapshot = await getDocs(nameQuery);
 
-  if (!nameSnapshot.empty) {
-    throw new Error(`Username "${trimmedName}" is already registered. Please sign in or choose a different name.`);
+  const directQuery = query(usersRef, where('name', '==', trimmedName));
+  const directSnapshot = await getDocs(directQuery);
+
+  if (!nameSnapshot.empty || !directSnapshot.empty) {
+    throw new Error(`Username "${trimmedName}" is already taken. Please choose a unique name.`);
   }
 
   const passwordHash = await hashPassword(password);
@@ -180,8 +192,18 @@ export async function registerUser(name: string, password: string, photoURL?: st
     bio: 'Ready to securely connect on CipherChat.'
   };
 
+  // Ensure no undefined values are passed to Firestore setDoc
   await setDoc(doc(db, 'users', uid), {
-    ...profile,
+    uid: profile.uid,
+    name: profile.name,
+    chatCode: profile.chatCode,
+    email: profile.email,
+    photoURL: photoURL || null,
+    avatarColor: profile.avatarColor,
+    avatarIcon: profile.avatarIcon,
+    createdAt: profile.createdAt,
+    lastSeen: profile.lastSeen,
+    bio: profile.bio,
     normalizedName,
     passwordHash,
     createdAtTimestamp: serverTimestamp()
@@ -293,12 +315,43 @@ export async function updateUserProfile(
   updates: Partial<Pick<UserProfile, 'name' | 'bio' | 'photoURL' | 'avatarColor' | 'avatarIcon'>>
 ): Promise<void> {
   const sanitizedUpdates: Record<string, unknown> = {
-    ...updates,
     updatedAt: Date.now()
   };
-  if (updates.name) {
-    sanitizedUpdates.normalizedName = updates.name.trim().toLowerCase();
+
+  if (updates.name !== undefined) {
+    const trimmedName = updates.name.trim();
+    if (trimmedName.length < 2) {
+      throw new Error('Name must be at least 2 characters long.');
+    }
+    const normalizedName = trimmedName.toLowerCase();
+
+    // Check if another user already has this username
+    const usersRef = collection(db, 'users');
+    const nameQuery = query(usersRef, where('normalizedName', '==', normalizedName));
+    const nameSnapshot = await getDocs(nameQuery);
+
+    const isTakenByOther = nameSnapshot.docs.some((d) => d.id !== uid);
+    if (isTakenByOther) {
+      throw new Error(`The username "${trimmedName}" is already taken. Please choose a different name.`);
+    }
+
+    sanitizedUpdates.name = trimmedName;
+    sanitizedUpdates.normalizedName = normalizedName;
   }
+
+  if (updates.bio !== undefined) {
+    sanitizedUpdates.bio = updates.bio.trim();
+  }
+  if (updates.avatarColor !== undefined) {
+    sanitizedUpdates.avatarColor = updates.avatarColor;
+  }
+  if (updates.avatarIcon !== undefined) {
+    sanitizedUpdates.avatarIcon = updates.avatarIcon;
+  }
+  if (updates.photoURL !== undefined) {
+    sanitizedUpdates.photoURL = updates.photoURL || null;
+  }
+
   await updateDoc(doc(db, 'users', uid), sanitizedUpdates);
 }
 
