@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile containing unique personal chat code, display name, and avatar settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "normalizedName": { "type": "string" },
+        "chatCode": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "avatarColor": { "type": "string" },
+        "avatarIcon": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "lastSeen": { "type": "number" },
+        "bio": { "type": "string" }
+      },
+      "required": ["uid", "name", "chatCode", "avatarColor", "avatarIcon", "createdAt"]
+    },
+    "ChatConversation": {
+      "title": "ChatConversation",
+      "description": "1-on-1 private chat conversation linked by unique chat codes and user IDs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participantIds": { "type": "array", "items": { "type": "string" } },
+        "participants": { "type": "object" },
+        "lastMessage": { "type": "object" },
+        "unreadCounts": { "type": "object" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "participantIds", "participants", "unreadCounts", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Chat message within a conversation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "readBy": { "type": "array", "items": { "type": "string" } },
+        "reactions": { "type": "object" }
+      },
+      "required": ["id", "senderId", "senderName", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile documents accessible for search and connection"
+    },
+    "/chats/{chatId}": {
+      "schema": "ChatConversation",
+      "description": "Conversations between two connected users"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Real-time messages sent within a conversation"
+    }
+  }
+}
