@@ -7,13 +7,18 @@ import {
   Lock,
   Sparkles,
   ArrowRight,
-  MessageCircle
+  MessageCircle,
+  Trash2,
+  AlertTriangle,
+  Image as ImageIcon,
+  Mic
 } from 'lucide-react';
 import { UserProfile, ChatConversation } from '../types';
 import { useTheme } from '../context/ThemeContext';
-import { formatChatCodeDisplay } from '../services/chatService';
+import { formatChatCodeDisplay, deleteConversation } from '../services/chatService';
 import { UserAvatar } from './UserAvatar';
 import { ChatRoomView } from './ChatRoomView';
+import { useToast } from './Toast';
 
 interface ChatsViewProps {
   user: UserProfile;
@@ -31,8 +36,10 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   onOpenNewChatModal
 }) => {
   const { theme } = useTheme();
+  const { showToast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
+  const [chatToDelete, setChatToDelete] = useState<ChatConversation | null>(null);
 
   const filteredChats = chats.filter((chat) => {
     const friendUid = chat.participantIds.find((id) => id !== user.uid) || user.uid;
@@ -62,11 +69,68 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const formatLastMessage = (chat: ChatConversation) => {
+    if (!chat.lastMessage) return 'Start conversation';
+    if (chat.lastMessage.isDeleted) return '🚫 This message was deleted';
+    if (chat.lastMessage.type === 'image') return '📷 Photo';
+    if (chat.lastMessage.type === 'audio') return '🎤 Voice message';
+    return chat.lastMessage.text;
+  };
+
+  const handleConfirmDeleteChat = async () => {
+    if (!chatToDelete) return;
+    try {
+      await deleteConversation(chatToDelete.id);
+      showToast('Conversation deleted', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete conversation', 'error');
+    } finally {
+      setChatToDelete(null);
+    }
+  };
+
   // Selected chat for desktop split view (default to activeChatId or first chat if available on desktop)
   const selectedChatId = activeChatId || (chats.length > 0 ? chats[0].id : null);
 
   return (
     <div className="h-full max-w-7xl mx-auto p-3 sm:p-5 lg:p-6">
+      {/* Delete Chat Confirmation Modal */}
+      {chatToDelete && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Delete Conversation?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This will delete this entire conversation and all its messages.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setChatToDelete(null)}
+                className="px-3.5 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteChat}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
+              >
+                Delete Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* DESKTOP / LAPTOP SPLIT VIEW (md: and above) */}
       <div className="hidden md:grid md:grid-cols-12 gap-5 h-[calc(100vh-3rem)]">
         {/* Left Column: Conversations List */}
@@ -148,40 +212,53 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                 return (
                   <div
                     key={chat.id}
-                    onClick={() => onOpenChat(chat.id)}
-                    className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
+                    className={`group relative flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all ${
                       isSelected
                         ? 'bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                     }`}
                   >
-                    <UserAvatar
-                      name={friend.name}
-                      photoURL={friend.photoURL}
-                      avatarColor={friend.avatarColor}
-                      avatarIcon={friend.avatarIcon}
-                      size="md"
-                      showOnlineStatus
-                    />
+                    <div onClick={() => onOpenChat(chat.id)} className="flex items-center gap-3 flex-1 min-w-0">
+                      <UserAvatar
+                        name={friend.name}
+                        photoURL={friend.photoURL}
+                        avatarColor={friend.avatarColor}
+                        avatarIcon={friend.avatarIcon}
+                        size="md"
+                        showOnlineStatus
+                      />
 
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-1 mb-0.5">
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                          {friend.name}
-                        </h4>
-                        <span className="text-[10px] text-slate-400 font-mono shrink-0">
-                          {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}
-                        </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                            {friend.name}
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                            {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}
+                          </span>
+                        </div>
+                        <p className={`text-xs truncate ${unread > 0 ? 'font-bold text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}>
+                          {formatLastMessage(chat)}
+                        </p>
                       </div>
-                      <p className={`text-xs truncate ${unread > 0 ? 'font-bold text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-slate-400'}`}>
-                        {chat.lastMessage ? chat.lastMessage.text : 'Start conversation'}
-                      </p>
                     </div>
 
-                    {unread > 0 && (
+                    {unread > 0 ? (
                       <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-600 text-white shrink-0">
                         {unread}
                       </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setChatToDelete(chat);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-all shrink-0 cursor-pointer"
+                        title="Delete chat"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     )}
                   </div>
                 );
@@ -294,48 +371,60 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
               return (
                 <div
                   key={chat.id}
-                  onClick={() => onOpenChat(chat.id)}
-                  className="flex items-center gap-3.5 p-4 hover:bg-slate-50 dark:hover:bg-slate-800/60 active:bg-slate-100 cursor-pointer transition-colors"
+                  className="flex items-center justify-between gap-3.5 p-4 hover:bg-slate-50 dark:hover:bg-slate-800/60 active:bg-slate-100 cursor-pointer transition-colors"
                 >
-                  <UserAvatar
-                    name={friend.name}
-                    photoURL={friend.photoURL}
-                    avatarColor={friend.avatarColor}
-                    avatarIcon={friend.avatarIcon}
-                    size="lg"
-                    showOnlineStatus
-                  />
+                  <div onClick={() => onOpenChat(chat.id)} className="flex items-center gap-3.5 flex-1 min-w-0">
+                    <UserAvatar
+                      name={friend.name}
+                      photoURL={friend.photoURL}
+                      avatarColor={friend.avatarColor}
+                      avatarIcon={friend.avatarIcon}
+                      size="lg"
+                      showOnlineStatus
+                    />
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                          {friend.name}
-                        </h4>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                          {formatChatCodeDisplay(friend.chatCode)}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                            {friend.name}
+                          </h4>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                            {formatChatCodeDisplay(friend.chatCode)}
+                          </span>
+                        </div>
+
+                        <span className="text-[11px] text-slate-400 font-medium shrink-0">
+                          {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}
                         </span>
                       </div>
 
-                      <span className="text-[11px] text-slate-400 font-medium shrink-0">
-                        {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}
-                      </span>
-                    </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={`text-xs truncate ${unread > 0 ? 'font-bold text-slate-900 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'}`}>
+                          {chat.lastMessage && chat.lastMessage.senderId === user.uid ? 'You: ' : ''}
+                          {formatLastMessage(chat)}
+                        </p>
 
-                    <div className="flex items-center justify-between gap-2">
-                      <p className={`text-xs truncate ${unread > 0 ? 'font-bold text-slate-900 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'}`}>
-                        {chat.lastMessage
-                          ? `${chat.lastMessage.senderId === user.uid ? 'You: ' : ''}${chat.lastMessage.text}`
-                          : 'No messages yet. Tap to say hello!'}
-                      </p>
-
-                      {unread > 0 && (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white shrink-0">
-                          {unread}
-                        </span>
-                      )}
+                        {unread > 0 && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-600 text-white shrink-0">
+                            {unread}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setChatToDelete(chat);
+                    }}
+                    className="p-2 text-slate-400 hover:text-rose-600 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/40 shrink-0 cursor-pointer"
+                    title="Delete Chat"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               );
             })

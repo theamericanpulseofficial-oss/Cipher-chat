@@ -19,16 +19,20 @@ export interface ChatParticipant {
   avatarIcon?: string;
 }
 
+export type MessageType = 'text' | 'image' | 'audio';
+
 export interface ChatConversation {
   id: string;
   participantIds: string[];
   participants: Record<string, ChatParticipant>;
   lastMessage?: {
     text: string;
+    type?: MessageType;
     senderId: string;
     senderName?: string;
     senderPhotoURL?: string;
     timestamp: number;
+    isDeleted?: boolean;
   };
   unreadCounts: Record<string, number>;
   createdAt: number;
@@ -41,9 +45,13 @@ export interface ChatMessage {
   senderName: string;
   senderPhotoURL?: string;
   text: string;
+  type?: MessageType;
+  mediaUrl?: string;
+  mediaDuration?: number; // duration in seconds for audio voice messages
   timestamp: number;
   readBy?: string[];
   reactions?: Record<string, string[]>; // emoji: [userIds]
+  isDeleted?: boolean;
 }
 
 export type NavTab = 'dashboard' | 'chats' | 'profile';

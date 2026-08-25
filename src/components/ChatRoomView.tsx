@@ -7,8 +7,15 @@ import {
   Copy,
   Check,
   Lock,
-  Sparkles,
-  Info
+  Image as ImageIcon,
+  Mic,
+  Trash2,
+  MoreVertical,
+  X,
+  Radio,
+  Download,
+  AlertTriangle,
+  RotateCcw
 } from 'lucide-react';
 import { UserProfile, ChatConversation, ChatMessage } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -16,12 +23,20 @@ import { useToast } from './Toast';
 import {
   subscribeToChatMessages,
   sendMessage,
+  sendImageMessage,
+  sendVoiceMessage,
+  deleteMessage,
+  clearChatMessages,
+  deleteConversation,
   markChatAsRead,
   toggleMessageReaction,
   formatChatCodeDisplay
 } from '../services/chatService';
 import { playMessageSentSound, playMessageReceivedSound } from '../utils/audio';
 import { UserAvatar } from './UserAvatar';
+import { VoiceMessagePlayer } from './VoiceMessagePlayer';
+import { ImageLightboxModal } from './ImageLightboxModal';
+import { compressImageFile, startVoiceRecording, VoiceRecorderSession } from '../utils/media';
 
 interface ChatRoomViewProps {
   chatId: string;
@@ -31,7 +46,7 @@ interface ChatRoomViewProps {
   isEmbedded?: boolean;
 }
 
-const QUICK_EMOJIS = ['👍', '❤️', '🔥', '😂', '🎉', '🔒'];
+const QUICK_EMOJIS = ['👍', '❤️', '🔥', '😂', '🎉', '🔒', '🙌', '💯'];
 
 export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   chatId,
@@ -48,6 +63,29 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showMenuDropdown, setShowMenuDropdown] = useState(false);
+
+  // Photo sending & Lightbox state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [imageCaption, setImageCaption] = useState('');
+  const [lightboxImage, setLightboxImage] = useState<{
+    url: string;
+    senderName?: string;
+    timestamp?: number;
+    caption?: string;
+  } | null>(null);
+
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const voiceSessionRef = useRef<VoiceRecorderSession | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+
+  // Delete modals state
+  const [confirmClearModal, setConfirmClearModal] = useState(false);
+  const [confirmDeleteChatModal, setConfirmDeleteChatModal] = useState(false);
+  const [messageToDelete, setMessageToDelete] = useState<ChatMessage | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevMessagesCount = useRef(0);
@@ -89,15 +127,22 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
     return () => {
       unsubscribe();
+      // Cleanup voice recorder if recording was ongoing
+      if (voiceSessionRef.current) {
+        voiceSessionRef.current.cancel();
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
     };
   }, [chatId, currentUser.uid, soundEnabled, showToast]);
 
-  // Auto scroll to bottom
+  // Auto scroll to bottom on message change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isRecording, previewImage]);
 
-  // Send message
+  // Send plain text message
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmed = inputText.trim();
@@ -108,7 +153,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
     try {
       if (soundEnabled) playMessageSentSound();
-      await sendMessage(chatId, currentUser, friendUid, trimmed);
+      await sendMessage(chatId, currentUser, friendUid, {
+        type: 'text',
+        text: trimmed
+      });
     } catch (err) {
       console.error(err);
       showToast('Failed to send message.', 'error');
@@ -118,16 +166,154 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // Handle enter key in input
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
+  // Handle image selection
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    try {
+      showToast('Processing photo...', 'info');
+      const compressedDataUrl = await compressImageFile(file, 1000, 1000, 0.75);
+      setPreviewImage(compressedDataUrl);
+      setImageCaption('');
+    } catch (err) {
+      console.error(err);
+      showToast('Could not load image. Please select a valid photo.', 'error');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Send photo message
+  const handleConfirmSendImage = async () => {
+    if (!previewImage || isSending) return;
+    setIsSending(true);
+
+    try {
+      if (soundEnabled) playMessageSentSound();
+      await sendImageMessage(chatId, currentUser, friendUid, previewImage, imageCaption.trim());
+      setPreviewImage(null);
+      setImageCaption('');
+      showToast('Photo sent!', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to send photo.', 'error');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // Voice recording: Start
+  const handleStartVoiceRecord = async () => {
+    try {
+      const session = await startVoiceRecording();
+      voiceSessionRef.current = session;
+      setIsRecording(true);
+      setRecordingDuration(0);
+
+      const startTime = Date.now();
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingDuration(Math.round((Date.now() - startTime) / 1000));
+      }, 500);
+    } catch (err) {
+      console.error('Microphone error:', err);
+      showToast('Microphone access required for voice message.', 'error');
+    }
+  };
+
+  // Voice recording: Cancel
+  const handleCancelVoiceRecord = () => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (voiceSessionRef.current) {
+      voiceSessionRef.current.cancel();
+      voiceSessionRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingDuration(0);
+    showToast('Voice recording discarded', 'info');
+  };
+
+  // Voice recording: Stop & Send
+  const handleSendVoiceRecord = async () => {
+    if (!voiceSessionRef.current) return;
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    setIsSending(true);
+    setIsRecording(false);
+
+    try {
+      const { audioDataUrl, duration } = await voiceSessionRef.current.stop();
+      voiceSessionRef.current = null;
+
+      if (duration < 1) {
+        showToast('Voice note too short.', 'info');
+        return;
+      }
+
+      if (soundEnabled) playMessageSentSound();
+      await sendVoiceMessage(chatId, currentUser, friendUid, audioDataUrl, duration);
+      showToast('Voice message sent!', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to send voice message.', 'error');
+    } finally {
+      setIsSending(false);
+      setRecordingDuration(0);
+    }
+  };
+
+  // Delete Message handler
+  const handleConfirmDeleteMessage = async (permanent = false) => {
+    if (!messageToDelete) return;
+    try {
+      await deleteMessage(chatId, messageToDelete.id, permanent);
+      showToast(permanent ? 'Message deleted permanently' : 'Message deleted for everyone', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete message', 'error');
+    } finally {
+      setMessageToDelete(null);
+    }
+  };
+
+  // Clear Chat History handler
+  const handleConfirmClearChat = async () => {
+    try {
+      await clearChatMessages(chatId);
+      showToast('Chat history cleared', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to clear chat', 'error');
+    } finally {
+      setConfirmClearModal(false);
+      setShowMenuDropdown(false);
+    }
+  };
+
+  // Delete Conversation handler
+  const handleConfirmDeleteConversation = async () => {
+    try {
+      await deleteConversation(chatId);
+      showToast('Conversation deleted', 'success');
+      setConfirmDeleteChatModal(false);
+      setShowMenuDropdown(false);
+      if (onBack) onBack();
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete conversation', 'error');
     }
   };
 
   // Copy message text
   const handleCopyMessage = (msg: ChatMessage) => {
+    if (!msg.text) return;
     navigator.clipboard.writeText(msg.text);
     setCopiedMsgId(msg.id);
     showToast('Message copied to clipboard', 'info');
@@ -147,10 +333,207 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           : 'fixed inset-0 z-50 md:relative md:inset-auto md:z-auto h-[100dvh] w-full overflow-hidden'
       }`}
     >
+      {/* Hidden File Input for Photos */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImageFileChange}
+        accept="image/*"
+        className="hidden"
+      />
+
+      {/* Lightbox Modal */}
+      {lightboxImage && (
+        <ImageLightboxModal
+          imageUrl={lightboxImage.url}
+          senderName={lightboxImage.senderName}
+          timestamp={lightboxImage.timestamp}
+          caption={lightboxImage.caption}
+          onClose={() => setLightboxImage(null)}
+        />
+      )}
+
+      {/* Image Preview Modal before sending */}
+      {previewImage && (
+        <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-lg w-full p-4 sm:p-5 shadow-2xl flex flex-col gap-3.5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <ImageIcon size={18} className="text-indigo-600 dark:text-indigo-400" />
+                <span>Send Photo</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="max-h-[50vh] overflow-hidden rounded-xl bg-slate-950 flex items-center justify-center">
+              <img
+                src={previewImage}
+                alt="Selected preview"
+                className="max-h-[48vh] w-auto object-contain rounded-lg"
+              />
+            </div>
+
+            <input
+              type="text"
+              value={imageCaption}
+              onChange={(e) => setImageCaption(e.target.value)}
+              placeholder="Add an optional caption..."
+              className={`w-full py-2.5 px-3.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+            />
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSending}
+                onClick={handleConfirmSendImage}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50"
+              >
+                <Send size={14} />
+                <span>{isSending ? 'Sending...' : 'Send Photo'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Message Confirmation Modal */}
+      {messageToDelete && (
+        <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Delete Message?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Choose how you want to delete this message.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => handleConfirmDeleteMessage(false)}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-left transition-colors cursor-pointer flex items-center justify-between"
+              >
+                <span>Delete for Everyone</span>
+                <span className="text-[10px] text-slate-400">WhatsApp style</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleConfirmDeleteMessage(true)}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-950/60 text-left transition-colors cursor-pointer flex items-center justify-between"
+              >
+                <span>Delete Permanently</span>
+                <span className="text-[10px] text-rose-500">Remove document</span>
+              </button>
+            </div>
+
+            <div className="pt-2 text-right">
+              <button
+                type="button"
+                onClick={() => setMessageToDelete(null)}
+                className="px-4 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Chat Confirmation Modal */}
+      {confirmClearModal && (
+        <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 flex items-center justify-center shrink-0">
+                <RotateCcw size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Clear Chat Messages?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This will delete all messages in this conversation for both participants.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmClearModal(false)}
+                className="px-3.5 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearChat}
+                className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs cursor-pointer"
+              >
+                Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Entire Conversation Confirmation Modal */}
+      {confirmDeleteChatModal && (
+        <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Delete Entire Chat?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  This will completely delete this conversation and all its messages.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteChatModal(false)}
+                className="px-3.5 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteConversation}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
+              >
+                Delete Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Chat Room Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#151b28]/95 backdrop-blur-md sticky top-0 z-20 shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          {/* Show back button only if onBack is provided (on mobile view) */}
+          {/* Back button (on mobile view) */}
           {onBack && (
             <button
               onClick={onBack}
@@ -186,11 +569,63 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Right Header Controls */}
+        <div className="flex items-center gap-2 relative">
           <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
             <Lock size={11} />
             Encrypted
           </span>
+
+          {/* More options menu button */}
+          <button
+            type="button"
+            onClick={() => setShowMenuDropdown(!showMenuDropdown)}
+            className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            aria-label="Chat options"
+          >
+            <MoreVertical size={18} />
+          </button>
+
+          {/* Dropdown Menu */}
+          {showMenuDropdown && (
+            <div className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
+              <button
+                type="button"
+                onClick={() => {
+                  fileInputRef.current?.click();
+                  setShowMenuDropdown(false);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
+              >
+                <ImageIcon size={14} className="text-indigo-500" />
+                <span>Send Photo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenuDropdown(false);
+                  setConfirmClearModal(true);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-xl transition-colors cursor-pointer"
+              >
+                <RotateCcw size={14} />
+                <span>Clear All Messages</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenuDropdown(false);
+                  setConfirmDeleteChatModal(true);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
+              >
+                <Trash2 size={14} />
+                <span>Delete Chat</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -200,7 +635,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         <div className="flex justify-center my-1">
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/80 text-slate-500 dark:text-slate-400 text-[11px]">
             <Lock size={11} className="text-indigo-600 dark:text-indigo-400" />
-            <span>Messages are encrypted & synced in real-time.</span>
+            <span>Messages, photos & audio are encrypted and synced in real-time.</span>
           </div>
         </div>
 
@@ -213,12 +648,13 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
               Beginning of your conversation with {friend.name}
             </p>
             <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-              Send a secure message to say hello!
+              Send a text, photo, or voice message to say hello!
             </p>
           </div>
         ) : (
           messages.map((msg) => {
             const isMe = msg.senderId === currentUser.uid;
+            const isDeleted = msg.isDeleted;
 
             return (
               <div
@@ -226,7 +662,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'} relative`}
               >
                 <div
-                  className={`flex items-end gap-2 max-w-[85%] sm:max-w-[75%] ${
+                  className={`flex items-end gap-2 max-w-[88%] sm:max-w-[75%] ${
                     isMe ? 'flex-row-reverse' : 'flex-row'
                   }`}
                 >
@@ -243,58 +679,126 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                     </div>
                   )}
 
-                  {/* Bubble */}
+                  {/* Message Bubble Container */}
                   <div
-                    className={`relative px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-2xs transition-all ${
-                      isMe
-                        ? `${theme.chatBubbleSender} rounded-br-xs`
-                        : `${theme.chatBubbleReceiver} rounded-bl-xs`
+                    className={`relative rounded-2xl text-sm leading-relaxed shadow-2xs transition-all overflow-hidden ${
+                      isDeleted
+                        ? 'bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 px-4 py-2.5 text-slate-400 italic'
+                        : isMe
+                        ? `${theme.chatBubbleSender} rounded-br-xs px-3 py-2.5`
+                        : `${theme.chatBubbleReceiver} rounded-bl-xs px-3 py-2.5`
                     }`}
                   >
-                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                    {/* If Deleted */}
+                    {isDeleted ? (
+                      <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                        <Trash2 size={13} />
+                        <span>This message was deleted</span>
+                      </p>
+                    ) : (
+                      <>
+                        {/* 1. PHOTO MESSAGE */}
+                        {msg.type === 'image' && msg.mediaUrl && (
+                          <div className="space-y-1.5">
+                            <div
+                              onClick={() =>
+                                setLightboxImage({
+                                  url: msg.mediaUrl!,
+                                  senderName: msg.senderName,
+                                  timestamp: msg.timestamp,
+                                  caption: msg.text
+                                })
+                              }
+                              className="cursor-pointer overflow-hidden rounded-xl max-w-sm max-h-72 bg-black/5 hover:opacity-95 transition-opacity"
+                            >
+                              <img
+                                src={msg.mediaUrl}
+                                alt="Shared photo"
+                                className="w-full h-auto object-cover max-h-72 rounded-xl"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                            {msg.text && (
+                              <p className="whitespace-pre-wrap break-words px-1 text-sm font-medium">
+                                {msg.text}
+                              </p>
+                            )}
+                          </div>
+                        )}
 
+                        {/* 2. AUDIO / VOICE MESSAGE */}
+                        {msg.type === 'audio' && msg.mediaUrl && (
+                          <VoiceMessagePlayer
+                            audioUrl={msg.mediaUrl}
+                            duration={msg.mediaDuration}
+                            isSender={isMe}
+                          />
+                        )}
+
+                        {/* 3. PLAIN TEXT MESSAGE */}
+                        {(!msg.type || msg.type === 'text') && (
+                          <p className="whitespace-pre-wrap break-words px-1">{msg.text}</p>
+                        )}
+
+                        {/* Time & Read Checkmark */}
+                        <div
+                          className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] ${
+                            isMe ? 'text-white/80' : 'text-slate-400 dark:text-slate-400'
+                          }`}
+                        >
+                          <span>{formatMsgTime(msg.timestamp)}</span>
+                          {isMe && <Check size={12} className="text-white/80" />}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Actions hover: Copy, React, Delete */}
+                  {!isDeleted && (
                     <div
-                      className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] ${
-                        isMe ? 'text-white/80' : 'text-slate-400 dark:text-slate-400'
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 self-center ${
+                        isMe ? 'flex-row-reverse' : 'flex-row'
                       }`}
                     >
-                      <span>{formatMsgTime(msg.timestamp)}</span>
-                      {isMe && <Check size={12} className="text-white/80" />}
+                      {msg.text && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(msg)}
+                          className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 cursor-pointer"
+                          title="Copy text"
+                        >
+                          {copiedMsgId === msg.id ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => toggleMessageReaction(chatId, msg.id, '❤️', currentUser.uid)}
+                        className="p-1 rounded-md text-slate-400 hover:text-rose-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
+                        title="React with heart"
+                      >
+                        ❤️
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleMessageReaction(chatId, msg.id, '👍', currentUser.uid)}
+                        className="p-1 rounded-md text-slate-400 hover:text-indigo-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
+                        title="React with thumbs up"
+                      >
+                        👍
+                      </button>
+
+                      {/* Delete Message Button */}
+                      <button
+                        type="button"
+                        onClick={() => setMessageToDelete(msg)}
+                        className="p-1 rounded-md text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 cursor-pointer"
+                        title="Delete Message"
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
-                  </div>
-
-                  {/* Actions hover */}
-                  <div
-                    className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 self-center ${
-                      isMe ? 'flex-row-reverse' : 'flex-row'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleCopyMessage(msg)}
-                      className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 cursor-pointer"
-                      title="Copy text"
-                    >
-                      {copiedMsgId === msg.id ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => toggleMessageReaction(chatId, msg.id, '❤️', currentUser.uid)}
-                      className="p-1 rounded-md text-slate-400 hover:text-rose-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
-                      title="React with heart"
-                    >
-                      ❤️
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleMessageReaction(chatId, msg.id, '👍', currentUser.uid)}
-                      className="p-1 rounded-md text-slate-400 hover:text-indigo-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
-                      title="React with thumbs up"
-                    >
-                      👍
-                    </button>
-                  </div>
+                  )}
                 </div>
 
                 {/* Display reactions */}
@@ -331,7 +835,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       </div>
 
       {/* Bottom Message Input (Sticky to bottom) */}
-      <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#151b28] sticky bottom-0 z-20 shrink-0">
+      <div className="p-2.5 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#151b28] sticky bottom-0 z-20 shrink-0">
         {/* Quick Emoji Bar */}
         {showEmojiPicker && (
           <div className="absolute bottom-full left-4 mb-2 p-2 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
@@ -351,36 +855,103 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            className="p-2.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
-            aria-label="Add emoji"
-          >
-            <Smile size={20} />
-          </button>
+        {/* VOICE RECORDING BAR (WhatsApp style live recording) */}
+        {isRecording ? (
+          <div className="flex items-center justify-between gap-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/60 p-2 sm:p-2.5 rounded-2xl animate-in fade-in duration-150">
+            <div className="flex items-center gap-2.5 pl-2">
+              <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-rose-700 dark:text-rose-300">
+                  Recording Voice Note
+                </span>
+                <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300">
+                  {Math.floor(recordingDuration / 60)}:
+                  {(recordingDuration % 60).toString().padStart(2, '0')}
+                </span>
+              </div>
+            </div>
 
-          <input
-            id="chat-message-input"
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a secure message... (Press Enter to send)"
-            className={`flex-1 py-2.5 px-4 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden transition-all`}
-          />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCancelVoiceRecord}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors cursor-pointer"
+              >
+                <Trash2 size={15} className="text-rose-600" />
+                <span className="hidden sm:inline">Cancel</span>
+              </button>
 
-          <button
-            id="chat-send-btn"
-            type="submit"
-            disabled={!inputText.trim() || isSending}
-            className="inline-flex items-center justify-center p-2.5 sm:px-5 sm:py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm transition-all shadow-xs active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shrink-0 cursor-pointer"
-          >
-            <Send size={17} />
-            <span className="hidden sm:inline ml-2">Send</span>
-          </button>
-        </form>
+              <button
+                type="button"
+                onClick={handleSendVoiceRecord}
+                disabled={isSending}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer transition-transform active:scale-95"
+              >
+                <Send size={14} />
+                <span>Send</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* STANDARD INPUT BAR */
+          <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
+            {/* Emoji toggle button */}
+            <button
+              type="button"
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              className="p-2 sm:p-2.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+              aria-label="Add emoji"
+            >
+              <Smile size={20} />
+            </button>
+
+            {/* Photo Attachment Button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-2 sm:p-2.5 rounded-xl text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+              aria-label="Send photo"
+              title="Send Photo"
+            >
+              <ImageIcon size={20} />
+            </button>
+
+            {/* Text input */}
+            <input
+              id="chat-message-input"
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Type a secure message..."
+              className={`flex-1 py-2.5 px-3.5 sm:px-4 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden transition-all`}
+            />
+
+            {/* Send or Voice Record Button (WhatsApp style dynamic action) */}
+            {inputText.trim().length > 0 ? (
+              <button
+                id="chat-send-btn"
+                type="submit"
+                disabled={isSending}
+                className="inline-flex items-center justify-center p-2.5 sm:px-4 sm:py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm transition-all shadow-xs active:scale-95 disabled:opacity-50 shrink-0 cursor-pointer"
+              >
+                <Send size={17} />
+                <span className="hidden sm:inline ml-2">Send</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartVoiceRecord}
+                className="inline-flex items-center justify-center p-2.5 rounded-xl bg-slate-100 hover:bg-indigo-50 dark:bg-slate-800 dark:hover:bg-indigo-950/50 text-slate-600 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-400 font-bold transition-all shrink-0 cursor-pointer"
+                title="Hold or tap to record voice note"
+              >
+                <Mic size={19} />
+              </button>
+            )}
+          </form>
+        )}
       </div>
     </div>
   );

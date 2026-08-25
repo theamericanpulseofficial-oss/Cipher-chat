@@ -5,16 +5,16 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   orderBy,
   onSnapshot,
   serverTimestamp,
-  arrayUnion,
-  arrayRemove
+  writeBatch
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { UserProfile, ChatConversation, ChatMessage } from '../types';
+import { UserProfile, ChatConversation, ChatMessage, MessageType } from '../types';
 
 // Normalize user search code
 export function normalizeChatCode(code: string): string {
@@ -236,10 +236,14 @@ export function subscribeToChatMessages(
           senderId: data.senderId,
           senderName: data.senderName,
           senderPhotoURL: data.senderPhotoURL || undefined,
-          text: data.text,
-          timestamp: data.timestamp,
+          text: data.text || '',
+          type: (data.type as MessageType) || 'text',
+          mediaUrl: data.mediaUrl || undefined,
+          mediaDuration: data.mediaDuration || undefined,
+          timestamp: data.timestamp || Date.now(),
           readBy: data.readBy || [],
-          reactions: data.reactions || {}
+          reactions: data.reactions || {},
+          isDeleted: data.isDeleted || false
         };
       });
       onMessagesUpdate(messages);
@@ -251,15 +255,24 @@ export function subscribeToChatMessages(
   );
 }
 
-// Send a message
+// Send a message (text, photo, or audio voice note)
 export async function sendMessage(
   chatId: string,
   sender: UserProfile,
   receiverUid: string,
-  text: string
+  options: {
+    text?: string;
+    type?: MessageType;
+    mediaUrl?: string;
+    mediaDuration?: number;
+  }
 ): Promise<void> {
-  const trimmed = text.trim();
-  if (!trimmed) return;
+  const msgType = options.type || 'text';
+  const trimmedText = options.text ? options.text.trim() : '';
+
+  // Validation
+  if (msgType === 'text' && !trimmedText) return;
+  if ((msgType === 'image' || msgType === 'audio') && !options.mediaUrl) return;
 
   const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const messageDocRef = doc(db, 'chats', chatId, 'messages', messageId);
@@ -267,15 +280,28 @@ export async function sendMessage(
 
   const timestamp = Date.now();
 
+  // Create preview text for conversation list
+  let previewText = trimmedText;
+  if (msgType === 'image') {
+    previewText = trimmedText ? `📷 ${trimmedText}` : '📷 Photo';
+  } else if (msgType === 'audio') {
+    const dur = options.mediaDuration ? ` (${Math.round(options.mediaDuration)}s)` : '';
+    previewText = `🎤 Voice message${dur}`;
+  }
+
   const messageData = {
     id: messageId,
     senderId: sender.uid,
     senderName: sender.name,
     senderPhotoURL: sender.photoURL || null,
-    text: trimmed,
+    text: trimmedText,
+    type: msgType,
+    mediaUrl: options.mediaUrl || null,
+    mediaDuration: options.mediaDuration || null,
     timestamp,
     readBy: [sender.uid],
-    reactions: {}
+    reactions: {},
+    isDeleted: false
   };
 
   // 1. Add message document
@@ -287,7 +313,8 @@ export async function sendMessage(
 
   await updateDoc(chatDocRef, {
     lastMessage: {
-      text: trimmed,
+      text: previewText,
+      type: msgType,
       senderId: sender.uid,
       senderName: sender.name,
       senderPhotoURL: sender.photoURL || null,
@@ -297,6 +324,100 @@ export async function sendMessage(
     [`unreadCounts.${receiverUid}`]: currentUnread + 1,
     [`unreadCounts.${sender.uid}`]: 0
   });
+}
+
+// Send an Image Message
+export async function sendImageMessage(
+  chatId: string,
+  sender: UserProfile,
+  receiverUid: string,
+  imageDataUrl: string,
+  caption = ''
+): Promise<void> {
+  return sendMessage(chatId, sender, receiverUid, {
+    type: 'image',
+    mediaUrl: imageDataUrl,
+    text: caption
+  });
+}
+
+// Send a Voice Audio Message
+export async function sendVoiceMessage(
+  chatId: string,
+  sender: UserProfile,
+  receiverUid: string,
+  audioDataUrl: string,
+  duration: number
+): Promise<void> {
+  return sendMessage(chatId, sender, receiverUid, {
+    type: 'audio',
+    mediaUrl: audioDataUrl,
+    mediaDuration: duration,
+    text: ''
+  });
+}
+
+// Delete an individual message
+export async function deleteMessage(
+  chatId: string,
+  messageId: string,
+  permanentDelete = false
+): Promise<void> {
+  const messageDocRef = doc(db, 'chats', chatId, 'messages', messageId);
+
+  if (permanentDelete) {
+    await deleteDoc(messageDocRef);
+  } else {
+    // Soft delete like WhatsApp: "This message was deleted"
+    await updateDoc(messageDocRef, {
+      isDeleted: true,
+      text: '🚫 This message was deleted',
+      mediaUrl: null,
+      mediaDuration: null,
+      deletedAt: Date.now()
+    });
+  }
+}
+
+// Clear all messages in a chat conversation
+export async function clearChatMessages(chatId: string): Promise<void> {
+  const messagesRef = collection(db, 'chats', chatId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+
+  const batch = writeBatch(db);
+  snapshot.docs.forEach((d) => {
+    batch.delete(d.ref);
+  });
+
+  await batch.commit();
+
+  // Reset lastMessage in chat document
+  const chatDocRef = doc(db, 'chats', chatId);
+  await updateDoc(chatDocRef, {
+    lastMessage: {
+      text: 'Chat cleared',
+      senderId: '',
+      timestamp: Date.now()
+    },
+    updatedAt: Date.now()
+  });
+}
+
+// Delete an entire chat conversation
+export async function deleteConversation(chatId: string): Promise<void> {
+  // 1. Delete all messages in subcollection
+  const messagesRef = collection(db, 'chats', chatId, 'messages');
+  const snapshot = await getDocs(messagesRef);
+
+  const batch = writeBatch(db);
+  snapshot.docs.forEach((d) => {
+    batch.delete(d.ref);
+  });
+  await batch.commit();
+
+  // 2. Delete main chat document
+  const chatDocRef = doc(db, 'chats', chatId);
+  await deleteDoc(chatDocRef);
 }
 
 // Mark chat as read
