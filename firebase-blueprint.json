@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "User profile containing unique personal chat code, display name, and avatar settings",
+      "description": "User profile containing unique personal chat code, display name, permissions, and avatar settings",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -12,18 +12,28 @@
         "passwordHash": { "type": "string" },
         "avatarColor": { "type": "string" },
         "avatarIcon": { "type": "string" },
+        "photoURL": { "type": "string" },
         "createdAt": { "type": "number" },
         "lastSeen": { "type": "number" },
-        "bio": { "type": "string" }
+        "bio": { "type": "string" },
+        "isBanned": { "type": "boolean" },
+        "messagingDisabled": { "type": "boolean" },
+        "voiceDisabled": { "type": "boolean" },
+        "photosDisabled": { "type": "boolean" }
       },
       "required": ["uid", "name", "chatCode", "avatarColor", "avatarIcon", "createdAt"]
     },
     "ChatConversation": {
       "title": "ChatConversation",
-      "description": "1-on-1 private chat conversation linked by unique chat codes and user IDs",
+      "description": "Chat conversation linked by unique chat codes and user IDs, supporting direct and group chats",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "isGroup": { "type": "boolean" },
+        "groupName": { "type": "string" },
+        "groupDescription": { "type": "string" },
+        "groupAvatar": { "type": "string" },
+        "adminUid": { "type": "string" },
         "participantIds": { "type": "array", "items": { "type": "string" } },
         "participants": { "type": "object" },
         "lastMessage": { "type": "object" },
@@ -41,12 +51,48 @@
         "id": { "type": "string" },
         "senderId": { "type": "string" },
         "senderName": { "type": "string" },
+        "senderPhotoURL": { "type": "string" },
         "text": { "type": "string" },
+        "type": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "mediaDuration": { "type": "number" },
         "timestamp": { "type": "number" },
         "readBy": { "type": "array", "items": { "type": "string" } },
-        "reactions": { "type": "object" }
+        "reactions": { "type": "object" },
+        "isDeleted": { "type": "boolean" }
       },
-      "required": ["id", "senderId", "senderName", "text", "timestamp"]
+      "required": ["id", "senderId", "senderName", "timestamp"]
+    },
+    "GroupRequest": {
+      "title": "GroupRequest",
+      "description": "Request submitted by user to create a new group chat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "requestedBy": { "type": "string" },
+        "requesterName": { "type": "string" },
+        "groupName": { "type": "string" },
+        "description": { "type": "string" },
+        "memberIds": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "requestedBy", "requesterName", "groupName", "status", "createdAt"]
+    },
+    "PasswordRequest": {
+      "title": "PasswordRequest",
+      "description": "Request submitted by user to reset/change their account password",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userChatCode": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "userName", "userChatCode", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -56,11 +102,19 @@
     },
     "/chats/{chatId}": {
       "schema": "ChatConversation",
-      "description": "Conversations between two connected users"
+      "description": "Conversations between connected users or groups"
     },
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "ChatMessage",
       "description": "Real-time messages sent within a conversation"
+    },
+    "/groupRequests/{requestId}": {
+      "schema": "GroupRequest",
+      "description": "Group creation requests submitted by users for admin approval"
+    },
+    "/passwordRequests/{requestId}": {
+      "schema": "PasswordRequest",
+      "description": "Password reset requests submitted by users for admin action"
     }
   }
 }

@@ -9,6 +9,12 @@ export interface UserProfile {
   createdAt: number;
   lastSeen?: number;
   bio?: string;
+  isOnline?: boolean;
+  isBanned?: boolean;
+  bannedReason?: string;
+  messagingDisabled?: boolean;
+  voiceDisabled?: boolean;
+  photosDisabled?: boolean;
 }
 
 export interface ChatParticipant {
@@ -23,6 +29,11 @@ export type MessageType = 'text' | 'image' | 'audio';
 
 export interface ChatConversation {
   id: string;
+  isGroup?: boolean;
+  groupName?: string;
+  groupDescription?: string;
+  groupAvatar?: string;
+  adminUid?: string;
   participantIds: string[];
   participants: Record<string, ChatParticipant>;
   lastMessage?: {
@@ -52,9 +63,32 @@ export interface ChatMessage {
   readBy?: string[];
   reactions?: Record<string, string[]>; // emoji: [userIds]
   isDeleted?: boolean;
+  deletedFor?: string[]; // userIds for whom message is deleted locally ("Delete for me")
 }
 
-export type NavTab = 'dashboard' | 'chats' | 'profile';
+export interface GroupRequest {
+  id: string;
+  requestedBy: string;
+  requesterName: string;
+  requesterChatCode?: string;
+  groupName: string;
+  description?: string;
+  memberIds: string[];
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+}
+
+export interface PasswordResetRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userChatCode: string;
+  reason?: string;
+  status: 'pending' | 'completed' | 'rejected';
+  createdAt: number;
+}
+
+export type NavTab = 'dashboard' | 'chats' | 'profile' | 'admin';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -83,3 +117,4 @@ export interface ThemeConfig {
   badgeBg: string;
   badgeText: string;
 }
+

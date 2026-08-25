@@ -90,11 +90,12 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
         </div>
       )}
 
-      {showOnlineStatus && (
+      {showOnlineStatus && isOnline && (
         <span
-          className={`absolute -bottom-0.5 -right-0.5 block rounded-full ring-2 ring-white dark:ring-[#151b28] ${
-            isOnline ? 'bg-emerald-500' : 'bg-slate-400'
-          } ${size === 'sm' ? 'w-2.5 h-2.5' : size === '2xl' ? 'w-4 h-4' : 'w-3 h-3'}`}
+          className={`absolute -bottom-0.5 -right-0.5 block rounded-full ring-2 ring-white dark:ring-[#151b28] bg-emerald-500 ${
+            size === 'sm' ? 'w-2.5 h-2.5' : size === '2xl' ? 'w-4 h-4' : 'w-3 h-3'
+          }`}
+          title="Online"
         />
       )}
     </div>

@@ -1,6 +1,6 @@
 {
   "name": "CipherChat",
-  "description": "Secure code-based real-time chat application with unique personal chat codes, instant friend lookup, and encrypted conversations.",
+  "description": "UP1CHATBOX - Secure code-based real-time chat application with unique personal chat codes, WhatsApp-style message deletion, and encrypted conversations.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

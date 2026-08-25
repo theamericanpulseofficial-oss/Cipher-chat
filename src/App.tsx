@@ -13,6 +13,7 @@ import { ChatsView } from './components/ChatsView';
 import { ChatRoomView } from './components/ChatRoomView';
 import { ProfileView } from './components/ProfileView';
 import { NewChatModal } from './components/NewChatModal';
+import { AdminDashboard } from './components/AdminDashboard';
 import { UserProfile, ChatConversation, NavTab } from './types';
 import { subscribeToAuthState, logoutUser } from './services/authService';
 import { subscribeToUserChats } from './services/chatService';
@@ -29,6 +30,7 @@ function MainApp() {
   const [chats, setChats] = useState<ChatConversation[]>([]);
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const [isMobileScreen, setIsMobileScreen] = useState(false);
+  const [isAdminView, setIsAdminView] = useState(false);
 
   // Monitor screen size for responsive mobile vs laptop view
   useEffect(() => {
@@ -110,7 +112,7 @@ function MainApp() {
         </div>
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Loader2 size={18} className="animate-spin text-indigo-600 dark:text-indigo-400" />
-          <span>Synchronizing CipherChat Session...</span>
+          <span>Synchronizing UP1CHATBOX Session...</span>
         </div>
       </div>
     );
@@ -119,6 +121,16 @@ function MainApp() {
   // Not logged in -> Show Login/Register Screen
   if (!currentUser) {
     return <AuthScreen onAuthSuccess={(profile) => setCurrentUser(profile)} />;
+  }
+
+  // Admin Dashboard Mode (Password 2026 accessed via secret triple click)
+  if (isAdminView) {
+    return (
+      <AdminDashboard
+        currentUser={currentUser}
+        onExit={() => setIsAdminView(false)}
+      />
+    );
   }
 
   // Mobile dedicated chat room view
@@ -185,6 +197,7 @@ function MainApp() {
                 onProfileUpdated={(updated) => {
                   setCurrentUser((prev) => (prev ? { ...prev, ...updated } : null));
                 }}
+                onEnterAdmin={() => setIsAdminView(true)}
               />
             )}
           </>

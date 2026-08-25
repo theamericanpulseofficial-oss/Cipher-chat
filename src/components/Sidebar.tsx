@@ -58,7 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div>
                 <h1 className="text-lg font-black tracking-tight text-slate-900 dark:text-white">
-                  CipherChat
+                  UP1CHATBOX
                 </h1>
                 <span className="text-[10px] uppercase font-bold tracking-widest text-indigo-600 dark:text-indigo-400 block -mt-1">
                   Encrypted
@@ -183,7 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <ShieldCheck size={18} />
           </div>
           <span className="font-extrabold text-base text-slate-900 dark:text-white">
-            CipherChat
+            UP1CHATBOX
           </span>
         </div>
 

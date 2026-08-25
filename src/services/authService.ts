@@ -91,7 +91,7 @@ export async function signInWithGoogle(): Promise<UserProfile> {
       avatarIcon: data.avatarIcon || 'shield',
       createdAt: data.createdAt || Date.now(),
       lastSeen: Date.now(),
-      bio: data.bio || 'Ready to securely connect on CipherChat.'
+      bio: data.bio || 'Ready to securely connect on UP1CHATBOX.'
     };
     await updateDoc(userDocRef, {
       lastSeen: Date.now(),
@@ -115,13 +115,13 @@ export async function signInWithGoogle(): Promise<UserProfile> {
     uid: user.uid,
     name: displayName,
     chatCode,
-    email: user.email || `${displayName.toLowerCase().replace(/[^a-z0-9]/g, '')}@cipherchat.internal`,
+    email: user.email || `${displayName.toLowerCase().replace(/[^a-z0-9]/g, '')}@up1chatbox.internal`,
     photoURL: user.photoURL || undefined,
     avatarColor,
     avatarIcon,
     createdAt: Date.now(),
     lastSeen: Date.now(),
-    bio: 'Ready to securely connect on CipherChat.'
+    bio: 'Ready to securely connect on UP1CHATBOX.'
   };
 
   await setDoc(userDocRef, {
@@ -183,13 +183,13 @@ export async function registerUser(name: string, password: string, photoURL?: st
     uid,
     name: trimmedName,
     chatCode,
-    email: `${normalizedName.replace(/[^a-z0-9]/g, '_')}@cipherchat.internal`,
+    email: `${normalizedName.replace(/[^a-z0-9]/g, '_')}@up1chatbox.internal`,
     photoURL: photoURL || undefined,
     avatarColor,
     avatarIcon,
     createdAt: Date.now(),
     lastSeen: Date.now(),
-    bio: 'Ready to securely connect on CipherChat.'
+    bio: 'Ready to securely connect on UP1CHATBOX.'
   };
 
   // Ensure no undefined values are passed to Firestore setDoc
@@ -271,7 +271,7 @@ export async function loginUser(identifier: string, password: string): Promise<U
     avatarIcon: userData.avatarIcon || 'shield',
     createdAt: userData.createdAt || Date.now(),
     lastSeen: Date.now(),
-    bio: userData.bio || 'Ready to securely connect on CipherChat.'
+    bio: userData.bio || 'Ready to securely connect on UP1CHATBOX.'
   };
 
   try {

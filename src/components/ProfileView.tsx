@@ -18,7 +18,12 @@ import {
   Loader2,
   Image as ImageIcon,
   User as UserIcon,
-  X
+  X,
+  KeyRound,
+  Lock,
+  Crop,
+  Send,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { UserProfile, ChatConversation } from '../types';
@@ -26,21 +31,25 @@ import { useTheme } from '../context/ThemeContext';
 import { useToast } from './Toast';
 import { formatChatCodeDisplay } from '../services/chatService';
 import { updateUserProfile } from '../services/authService';
+import { submitPasswordResetRequest } from '../services/adminService';
 import { UserAvatar } from './UserAvatar';
-import { compressImageFile, PRESET_AVATARS } from '../utils/imageUtils';
+import { PRESET_AVATARS } from '../utils/imageUtils';
+import { ImageCropperModal } from './ImageCropperModal';
 
 interface ProfileViewProps {
   user: UserProfile;
   chats: ChatConversation[];
   onLogout: () => void;
   onProfileUpdated?: (updated: Partial<UserProfile>) => void;
+  onEnterAdmin?: () => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   user,
   chats,
   onLogout,
-  onProfileUpdated
+  onProfileUpdated,
+  onEnterAdmin
 }) => {
   const { theme, themeMode, setThemeMode, soundEnabled, setSoundEnabled } = useTheme();
   const { showToast } = useToast();
@@ -52,7 +61,54 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [showPresetModal, setShowPresetModal] = useState(false);
 
+  // Triple-Click Admin Trigger
+  const [clickCount, setClickCount] = useState(0);
+  const lastClickTimeRef = useRef<number>(0);
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
+  const [adminPassInput, setAdminPassInput] = useState('');
+  const [adminAuthError, setAdminAuthError] = useState(false);
+
+  // Cropper State for Profile Photo
+  const [rawPhotoForCrop, setRawPhotoForCrop] = useState<string | null>(null);
+  const [showCropperModal, setShowCropperModal] = useState(false);
+
+  // Request Password Reset Modal
+  const [showPasswordReqModal, setShowPasswordReqModal] = useState(false);
+  const [passwordReqReason, setPasswordReqReason] = useState('');
+  const [isSubmittingPasswordReq, setIsSubmittingPasswordReq] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Secret Triple-Click on "Account Profile & Settings" / "Setting"
+  const handleHeaderTripleClick = () => {
+    const now = Date.now();
+    if (now - lastClickTimeRef.current > 1500) {
+      setClickCount(1);
+    } else {
+      const nextCount = clickCount + 1;
+      setClickCount(nextCount);
+      if (nextCount >= 3) {
+        setShowAdminAuthModal(true);
+        setClickCount(0);
+        setAdminPassInput('');
+        setAdminAuthError(false);
+      }
+    }
+    lastClickTimeRef.current = now;
+  };
+
+  // Verify Admin Passcode (2026)
+  const handleVerifyAdminPasscode = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (adminPassInput.trim() === '2026') {
+      setShowAdminAuthModal(false);
+      setAdminPassInput('');
+      showToast('Admin mode authenticated!', 'success');
+      onEnterAdmin?.();
+    } else {
+      setAdminAuthError(true);
+    }
+  };
 
   // Copy Chat Code
   const handleCopyCode = async () => {
@@ -74,25 +130,39 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  // Handle Photo File Upload
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Photo Selection -> Open Cropper
+  const handlePhotoFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setRawPhotoForCrop(reader.result);
+        setShowCropperModal(true);
+      }
+    };
+    reader.readAsDataURL(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Handle Apply Cropped Avatar
+  const handleAvatarCropApplied = async (croppedBase64: string) => {
+    setShowCropperModal(false);
+    setRawPhotoForCrop(null);
     setIsUploadingPhoto(true);
+
     try {
-      const compressedBase64 = await compressImageFile(file, 300, 0.85);
-      await updateUserProfile(user.uid, { photoURL: compressedBase64 });
-      user.photoURL = compressedBase64;
-      onProfileUpdated?.({ photoURL: compressedBase64 });
+      await updateUserProfile(user.uid, { photoURL: croppedBase64 });
+      user.photoURL = croppedBase64;
+      onProfileUpdated?.({ photoURL: croppedBase64 });
       showToast('Profile photo updated successfully!', 'success');
     } catch (err: unknown) {
       console.error(err);
-      const msg = err instanceof Error ? err.message : 'Failed to upload photo';
+      const msg = err instanceof Error ? err.message : 'Failed to update photo';
       showToast(msg, 'error');
     } finally {
       setIsUploadingPhoto(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -156,6 +226,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
+  // Submit Password Request
+  const handleSubmitPasswordRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmittingPasswordReq(true);
+    try {
+      await submitPasswordResetRequest(user, passwordReqReason);
+      showToast('Password change request sent to Admin successfully!', 'success');
+      setShowPasswordReqModal(false);
+      setPasswordReqReason('');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to submit password request', 'error');
+    } finally {
+      setIsSubmittingPasswordReq(false);
+    }
+  };
+
   const memberSince = new Date(user.createdAt || Date.now()).toLocaleDateString([], {
     year: 'numeric',
     month: 'long',
@@ -164,9 +251,170 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 p-4 sm:p-6 lg:p-8">
-      {/* Header */}
+      {/* Interactive Image Cropper for Profile Photo */}
+      {showCropperModal && rawPhotoForCrop && (
+        <ImageCropperModal
+          imageSrc={rawPhotoForCrop}
+          isOpen={showCropperModal}
+          aspectRatio="square"
+          isCircularMask={true}
+          title="Crop Profile Photo"
+          onCropComplete={handleAvatarCropApplied}
+          onClose={() => {
+            setShowCropperModal(false);
+            setRawPhotoForCrop(null);
+          }}
+        />
+      )}
+
+      {/* Secret Admin Authentication Modal (3 Clicks Trigger) */}
+      {showAdminAuthModal && (
+        <div className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                <Lock size={20} />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">Security Verification</h3>
+                <p className="text-[11px] text-slate-400">Enter access key to continue</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleVerifyAdminPasscode} className="space-y-3 pt-1">
+              <div>
+                <input
+                  type="password"
+                  value={adminPassInput}
+                  onChange={(e) => {
+                    setAdminPassInput(e.target.value);
+                    setAdminAuthError(false);
+                  }}
+                  placeholder="••••"
+                  autoFocus
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-center tracking-widest text-lg focus:outline-hidden focus:border-indigo-500"
+                />
+                {adminAuthError && (
+                  <p className="text-[11px] text-rose-400 text-center mt-1.5 font-medium">
+                    Access Denied
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminAuthModal(false)}
+                  className="px-3.5 py-2 text-xs font-bold text-slate-400 hover:text-white rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-lg transition-all active:scale-95 cursor-pointer"
+                >
+                  Authenticate
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Password Request Modal */}
+      {showPasswordReqModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <KeyRound size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Request Password Change
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Send a request directly to the Admin
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPasswordReqModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitPasswordRequest} className="space-y-4 pt-1">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Reason / Note for Admin (Optional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={passwordReqReason}
+                  onChange={(e) => setPasswordReqReason(e.target.value)}
+                  placeholder="e.g. Please reset my password or set my new temporary key"
+                  className={`w-full px-3.5 py-2 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-xs`}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordReqModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingPasswordReq}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95 disabled:opacity-60 cursor-pointer"
+                >
+                  {isSubmittingPasswordReq ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Send size={14} />
+                  )}
+                  <span>Submit Request</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Account Restrictions Banner (if any) */}
+      {(user.isBanned || user.messagingDisabled || user.voiceDisabled || user.photosDisabled) && (
+        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 flex items-start gap-3">
+          <AlertTriangle size={20} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="text-xs font-bold text-rose-800 dark:text-rose-300">
+              Account Moderation Notice
+            </h4>
+            <p className="text-xs text-rose-700 dark:text-rose-400">
+              {user.isBanned && 'Your account has been suspended by the administrator.'}
+              {user.messagingDisabled && ' Text messaging is disabled for your account.'}
+              {user.voiceDisabled && ' Voice messages are disabled for your account.'}
+              {user.photosDisabled && ' Photo sharing is disabled for your account.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Header - Triple Click Secret Trigger on Title */}
       <div>
-        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+        <h2
+          onClick={handleHeaderTripleClick}
+          className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white cursor-pointer select-none transition-colors"
+          title="Account Profile & Settings"
+        >
           Account Profile & Settings
         </h2>
         <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
@@ -179,7 +427,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        onChange={handlePhotoUpload}
+        onChange={handlePhotoFileSelected}
         className="hidden"
       />
 
@@ -195,6 +443,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               avatarIcon={user.avatarIcon}
               size="2xl"
               showOnlineStatus
+              isOnline={true}
             />
 
             <button
@@ -241,8 +490,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 disabled={isUploadingPhoto}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-xs cursor-pointer disabled:opacity-60"
               >
-                <Upload size={14} />
-                <span>Upload Custom Photo</span>
+                <Crop size={14} />
+                <span>Upload & Crop Photo</span>
               </button>
 
               <button
@@ -304,7 +553,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex items-center justify-between pt-1">
+            <button
+              type="button"
+              onClick={() => setShowPasswordReqModal(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+            >
+              <KeyRound size={14} />
+              <span>Request Password Change</span>
+            </button>
+
             <button
               type="submit"
               id="btn-save-profile-info"
@@ -500,7 +758,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 hover:bg-rose-100/80 dark:bg-rose-950/30 dark:hover:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold text-sm transition-colors cursor-pointer"
         >
           <LogOut size={18} />
-          <span>Sign Out of CipherChat</span>
+          <span>Sign Out of UP1CHATBOX</span>
         </button>
       </div>
 

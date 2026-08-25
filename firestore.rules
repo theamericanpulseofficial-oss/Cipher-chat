@@ -6,7 +6,7 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Chats collection: Real-time conversations between users
+    // Chats collection: Real-time conversations (direct & group)
     match /chats/{chatId} {
       allow read, write: if true;
 
@@ -15,6 +15,17 @@ service cloud.firestore {
         allow read, write: if true;
       }
     }
+
+    // Group Requests collection: Users submit requests to create groups, Admin approves
+    match /groupRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    // Password Requests collection: Users request password changes, Admin sets new password
+    match /passwordRequests/{requestId} {
+      allow read, write: if true;
+    }
   }
 }
+
 

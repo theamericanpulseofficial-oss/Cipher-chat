@@ -11,7 +11,8 @@ import {
   orderBy,
   onSnapshot,
   serverTimestamp,
-  writeBatch
+  writeBatch,
+  arrayUnion
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { UserProfile, ChatConversation, ChatMessage, MessageType } from '../types';
@@ -243,7 +244,8 @@ export function subscribeToChatMessages(
           timestamp: data.timestamp || Date.now(),
           readBy: data.readBy || [],
           reactions: data.reactions || {},
-          isDeleted: data.isDeleted || false
+          isDeleted: data.isDeleted || false,
+          deletedFor: data.deletedFor || []
         };
       });
       onMessagesUpdate(messages);
@@ -301,7 +303,8 @@ export async function sendMessage(
     timestamp,
     readBy: [sender.uid],
     reactions: {},
-    isDeleted: false
+    isDeleted: false,
+    deletedFor: []
   };
 
   // 1. Add message document
@@ -309,21 +312,33 @@ export async function sendMessage(
 
   // 2. Update chat conversation document with lastMessage and unread count
   const chatSnap = await getDoc(chatDocRef);
-  const currentUnread = chatSnap.exists() ? chatSnap.data().unreadCounts?.[receiverUid] || 0 : 0;
+  if (chatSnap.exists()) {
+    const chatData = chatSnap.data();
+    const participantIds: string[] = chatData.participantIds || [receiverUid, sender.uid];
+    const currentUnreads: Record<string, number> = chatData.unreadCounts || {};
 
-  await updateDoc(chatDocRef, {
-    lastMessage: {
-      text: previewText,
-      type: msgType,
-      senderId: sender.uid,
-      senderName: sender.name,
-      senderPhotoURL: sender.photoURL || null,
-      timestamp
-    },
-    updatedAt: timestamp,
-    [`unreadCounts.${receiverUid}`]: currentUnread + 1,
-    [`unreadCounts.${sender.uid}`]: 0
-  });
+    const updatedUnreads: Record<string, number> = { ...currentUnreads };
+    participantIds.forEach((pid) => {
+      if (pid === sender.uid) {
+        updatedUnreads[pid] = 0;
+      } else {
+        updatedUnreads[pid] = (updatedUnreads[pid] || 0) + 1;
+      }
+    });
+
+    await updateDoc(chatDocRef, {
+      lastMessage: {
+        text: previewText,
+        type: msgType,
+        senderId: sender.uid,
+        senderName: sender.name,
+        senderPhotoURL: sender.photoURL || null,
+        timestamp
+      },
+      updatedAt: timestamp,
+      unreadCounts: updatedUnreads
+    });
+  }
 }
 
 // Send an Image Message
@@ -357,36 +372,96 @@ export async function sendVoiceMessage(
   });
 }
 
-// Delete an individual message
-export async function deleteMessage(
+// Delete message(s) for everyone (WhatsApp style) - Only allowed for messages sent by the user
+export async function deleteMessagesForEveryone(
   chatId: string,
-  messageId: string,
-  permanentDelete = false
+  messageIds: string[]
 ): Promise<void> {
-  const messageDocRef = doc(db, 'chats', chatId, 'messages', messageId);
+  if (!messageIds || messageIds.length === 0) return;
+  const batch = writeBatch(db);
 
-  if (permanentDelete) {
-    await deleteDoc(messageDocRef);
-  } else {
-    // Soft delete like WhatsApp: "This message was deleted"
-    await updateDoc(messageDocRef, {
+  messageIds.forEach((msgId) => {
+    const messageDocRef = doc(db, 'chats', chatId, 'messages', msgId);
+    batch.update(messageDocRef, {
       isDeleted: true,
       text: '🚫 This message was deleted',
       mediaUrl: null,
       mediaDuration: null,
       deletedAt: Date.now()
     });
+  });
+
+  await batch.commit();
+}
+
+// Delete message(s) for me (WhatsApp style) - Adds userId to deletedFor array
+export async function deleteMessagesForMe(
+  chatId: string,
+  messageIds: string[],
+  userId: string
+): Promise<void> {
+  if (!messageIds || messageIds.length === 0) return;
+  const batch = writeBatch(db);
+
+  messageIds.forEach((msgId) => {
+    const messageDocRef = doc(db, 'chats', chatId, 'messages', msgId);
+    batch.update(messageDocRef, {
+      deletedFor: arrayUnion(userId)
+    });
+  });
+
+  await batch.commit();
+}
+
+// Legacy single message delete helper
+export async function deleteMessage(
+  chatId: string,
+  messageId: string,
+  deleteForEveryone = true,
+  currentUserId?: string
+): Promise<void> {
+  if (deleteForEveryone) {
+    await deleteMessagesForEveryone(chatId, [messageId]);
+  } else if (currentUserId) {
+    await deleteMessagesForMe(chatId, [messageId], currentUserId);
   }
 }
 
-// Clear all messages in a chat conversation
-export async function clearChatMessages(chatId: string): Promise<void> {
+// Clear chat messages (WhatsApp style):
+// 1. For current user, all messages in the chat have currentUserId added to deletedFor (so chat is completely clean for current user)
+// 2. If deleteMyMessagesForEveryone is true: Only messages sent by current user are marked isDeleted: true so recipient sees "🚫 This message was deleted"
+// 3. Recipient's messages are NOT deleted for the recipient!
+export async function clearChatMessages(
+  chatId: string,
+  currentUserId: string,
+  deleteMyMessagesForEveryone = true
+): Promise<void> {
   const messagesRef = collection(db, 'chats', chatId, 'messages');
   const snapshot = await getDocs(messagesRef);
 
+  if (snapshot.empty) return;
+
   const batch = writeBatch(db);
   snapshot.docs.forEach((d) => {
-    batch.delete(d.ref);
+    const data = d.data();
+    const isSentByMe = data.senderId === currentUserId;
+
+    if (isSentByMe && deleteMyMessagesForEveryone) {
+      // Mark as deleted for everyone AND add to deletedFor
+      batch.update(d.ref, {
+        isDeleted: true,
+        text: '🚫 This message was deleted',
+        mediaUrl: null,
+        mediaDuration: null,
+        deletedAt: Date.now(),
+        deletedFor: arrayUnion(currentUserId)
+      });
+    } else {
+      // Just mark deleted for me
+      batch.update(d.ref, {
+        deletedFor: arrayUnion(currentUserId)
+      });
+    }
   });
 
   await batch.commit();
@@ -394,11 +469,6 @@ export async function clearChatMessages(chatId: string): Promise<void> {
   // Reset lastMessage in chat document
   const chatDocRef = doc(db, 'chats', chatId);
   await updateDoc(chatDocRef, {
-    lastMessage: {
-      text: 'Chat cleared',
-      senderId: '',
-      timestamp: Date.now()
-    },
     updatedAt: Date.now()
   });
 }
@@ -420,13 +490,33 @@ export async function deleteConversation(chatId: string): Promise<void> {
   await deleteDoc(chatDocRef);
 }
 
-// Mark chat as read
+// Mark chat as read and mark all message read receipts
 export async function markChatAsRead(chatId: string, userId: string): Promise<void> {
   const chatDocRef = doc(db, 'chats', chatId);
   try {
     await updateDoc(chatDocRef, {
       [`unreadCounts.${userId}`]: 0
     });
+
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const msgSnap = await getDocs(messagesRef);
+    const batch = writeBatch(db);
+    let hasUpdates = false;
+
+    msgSnap.docs.forEach((d) => {
+      const data = d.data();
+      const readBy: string[] = data.readBy || [];
+      if (!readBy.includes(userId)) {
+        batch.update(d.ref, {
+          readBy: [...readBy, userId]
+        });
+        hasUpdates = true;
+      }
+    });
+
+    if (hasUpdates) {
+      await batch.commit();
+    }
   } catch (e) {
     console.warn('Could not mark chat as read:', e);
   }

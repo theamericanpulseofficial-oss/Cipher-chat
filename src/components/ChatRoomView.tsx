@@ -6,6 +6,7 @@ import {
   Smile,
   Copy,
   Check,
+  CheckCheck,
   Lock,
   Image as ImageIcon,
   Mic,
@@ -15,7 +16,8 @@ import {
   Radio,
   Download,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  CheckSquare
 } from 'lucide-react';
 import { UserProfile, ChatConversation, ChatMessage } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -25,6 +27,8 @@ import {
   sendMessage,
   sendImageMessage,
   sendVoiceMessage,
+  deleteMessagesForEveryone,
+  deleteMessagesForMe,
   deleteMessage,
   clearChatMessages,
   deleteConversation,
@@ -36,6 +40,7 @@ import { playMessageSentSound, playMessageReceivedSound } from '../utils/audio';
 import { UserAvatar } from './UserAvatar';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { ImageCropperModal } from './ImageCropperModal';
 import { compressImageFile, startVoiceRecording, VoiceRecorderSession } from '../utils/media';
 
 interface ChatRoomViewProps {
@@ -65,8 +70,15 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
 
+  // Multi-select & Long Press (WhatsApp style)
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const longPressTimerRef = useRef<number | null>(null);
+  const isLongPressActiveRef = useRef(false);
+
   // Photo sending & Lightbox state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [rawPhotoForCrop, setRawPhotoForCrop] = useState<string | null>(null);
+  const [showCropperModal, setShowCropperModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [imageCaption, setImageCaption] = useState('');
   const [lightboxImage, setLightboxImage] = useState<{
@@ -84,8 +96,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
   // Delete modals state
   const [confirmClearModal, setConfirmClearModal] = useState(false);
+  const [clearChatDeleteMyForEveryone, setClearChatDeleteMyForEveryone] = useState(true);
   const [confirmDeleteChatModal, setConfirmDeleteChatModal] = useState(false);
-  const [messageToDelete, setMessageToDelete] = useState<ChatMessage | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTargetMessages, setDeleteTargetMessages] = useState<ChatMessage[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const prevMessagesCount = useRef(0);
@@ -134,13 +148,18 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
       }
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+      }
     };
   }, [chatId, currentUser.uid, soundEnabled, showToast]);
 
-  // Auto scroll to bottom on message change
+  // Auto scroll to bottom on message change (only when not in selection mode)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isRecording, previewImage]);
+    if (selectedMessageIds.size === 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isRecording, previewImage, selectedMessageIds.size]);
 
   // Send plain text message
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -166,23 +185,36 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // Handle image selection
+  // Handle image selection -> Open Cropper
   const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     const file = files[0];
     try {
-      showToast('Processing photo...', 'info');
-      const compressedDataUrl = await compressImageFile(file, 1000, 1000, 0.75);
-      setPreviewImage(compressedDataUrl);
-      setImageCaption('');
+      showToast('Loading photo for cropping...', 'info');
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setRawPhotoForCrop(reader.result);
+          setShowCropperModal(true);
+        }
+      };
+      reader.readAsDataURL(file);
     } catch (err) {
       console.error(err);
       showToast('Could not load image. Please select a valid photo.', 'error');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  // When crop is confirmed
+  const handleChatCropComplete = (croppedBase64: string) => {
+    setShowCropperModal(false);
+    setRawPhotoForCrop(null);
+    setPreviewImage(croppedBase64);
+    setImageCaption('');
   };
 
   // Send photo message
@@ -269,24 +301,141 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // Delete Message handler
-  const handleConfirmDeleteMessage = async (permanent = false) => {
-    if (!messageToDelete) return;
-    try {
-      await deleteMessage(chatId, messageToDelete.id, permanent);
-      showToast(permanent ? 'Message deleted permanently' : 'Message deleted for everyone', 'success');
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to delete message', 'error');
-    } finally {
-      setMessageToDelete(null);
+  // --- WHATSAPP-STYLE HOLD & SELECT LOGIC ---
+  const handleMessageTouchStart = (msg: ChatMessage) => {
+    isLongPressActiveRef.current = false;
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
+    longPressTimerRef.current = window.setTimeout(() => {
+      isLongPressActiveRef.current = true;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate(50);
+        } catch {
+          // ignore
+        }
+      }
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        next.add(msg.id);
+        return next;
+      });
+    }, 400);
+  };
+
+  const handleMessageTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
     }
   };
 
-  // Clear Chat History handler
+  const handleMessageClick = (msg: ChatMessage) => {
+    // If long press was just triggered, skip click
+    if (isLongPressActiveRef.current) {
+      isLongPressActiveRef.current = false;
+      return;
+    }
+
+    // If we are currently in selection mode, clicking a message toggles its selection
+    if (selectedMessageIds.size > 0) {
+      setSelectedMessageIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(msg.id)) {
+          next.delete(msg.id);
+        } else {
+          next.add(msg.id);
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedMessageIds(new Set());
+  };
+
+  // Copy selected messages
+  const handleCopySelected = () => {
+    const selectedMsgs = messages.filter(
+      (m) => selectedMessageIds.has(m.id) && m.text && !m.isDeleted
+    );
+    if (selectedMsgs.length === 0) {
+      showToast('No text to copy in selected message(s)', 'info');
+      return;
+    }
+    const combined = selectedMsgs.map((m) => m.text).join('\n');
+    navigator.clipboard.writeText(combined);
+    showToast(
+      selectedMsgs.length > 1
+        ? `${selectedMsgs.length} messages copied to clipboard`
+        : 'Message copied to clipboard',
+      'info'
+    );
+    setSelectedMessageIds(new Set());
+  };
+
+  // Open delete modal for selected messages
+  const handleOpenDeleteSelected = () => {
+    const targets = messages.filter((m) => selectedMessageIds.has(m.id));
+    if (targets.length === 0) return;
+    setDeleteTargetMessages(targets);
+    setShowDeleteModal(true);
+  };
+
+  // Open delete modal for a single hovered message
+  const handleOpenDeleteSingle = (msg: ChatMessage) => {
+    setDeleteTargetMessages([msg]);
+    setShowDeleteModal(true);
+  };
+
+  // Check if all messages in delete targets were sent by currentUser
+  const allSelectedFromMe =
+    deleteTargetMessages.length > 0 &&
+    deleteTargetMessages.every((m) => m.senderId === currentUser.uid);
+
+  // Execute WhatsApp Delete Action
+  const handleExecuteDelete = async (action: 'everyone' | 'forMe') => {
+    if (deleteTargetMessages.length === 0) return;
+    const ids = deleteTargetMessages.map((m) => m.id);
+
+    try {
+      if (action === 'everyone') {
+        // Can only delete for everyone if sent by user
+        if (!allSelectedFromMe) {
+          showToast('You can only delete your own messages for everyone.', 'error');
+          return;
+        }
+        await deleteMessagesForEveryone(chatId, ids);
+        showToast(
+          ids.length > 1
+            ? `${ids.length} messages deleted for everyone`
+            : 'Message deleted for everyone',
+          'success'
+        );
+      } else {
+        await deleteMessagesForMe(chatId, ids, currentUser.uid);
+        showToast(
+          ids.length > 1
+            ? `${ids.length} messages deleted for you`
+            : 'Message deleted for you',
+          'success'
+        );
+      }
+      setSelectedMessageIds(new Set());
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete message(s)', 'error');
+    } finally {
+      setShowDeleteModal(false);
+      setDeleteTargetMessages([]);
+    }
+  };
+
+  // Clear Chat History handler (WhatsApp style)
   const handleConfirmClearChat = async () => {
     try {
-      await clearChatMessages(chatId);
+      await clearChatMessages(chatId, currentUser.uid, clearChatDeleteMyForEveryone);
       showToast('Chat history cleared', 'success');
     } catch (err) {
       console.error(err);
@@ -294,6 +443,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     } finally {
       setConfirmClearModal(false);
       setShowMenuDropdown(false);
+      setSelectedMessageIds(new Set());
     }
   };
 
@@ -311,7 +461,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // Copy message text
+  // Copy single message text
   const handleCopyMessage = (msg: ChatMessage) => {
     if (!msg.text) return;
     navigator.clipboard.writeText(msg.text);
@@ -324,6 +474,11 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const formatMsgTime = (ts: number) => {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
+
+  // Filter messages to hide any that the current user deleted "For Me"
+  const visibleMessages = messages.filter(
+    (m) => !m.deletedFor || !m.deletedFor.includes(currentUser.uid)
+  );
 
   return (
     <div
@@ -341,6 +496,22 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         accept="image/*"
         className="hidden"
       />
+
+      {/* Image Cropper Modal for Chat Photos */}
+      {showCropperModal && rawPhotoForCrop && (
+        <ImageCropperModal
+          imageSrc={rawPhotoForCrop}
+          isOpen={showCropperModal}
+          aspectRatio="free"
+          isCircularMask={false}
+          title="Crop Photo Before Sending"
+          onCropComplete={handleChatCropComplete}
+          onClose={() => {
+            setShowCropperModal(false);
+            setRawPhotoForCrop(null);
+          }}
+        />
+      )}
 
       {/* Lightbox Modal */}
       {lightboxImage && (
@@ -409,8 +580,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         </div>
       )}
 
-      {/* Delete Message Confirmation Modal */}
-      {messageToDelete && (
+      {/* Delete Message Confirmation Modal (WhatsApp Style) */}
+      {showDeleteModal && deleteTargetMessages.length > 0 && (
         <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
             <div className="flex items-center gap-3">
@@ -418,37 +589,48 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 <Trash2 size={20} />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Delete Message?</h3>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                  {deleteTargetMessages.length > 1
+                    ? `Delete ${deleteTargetMessages.length} Messages?`
+                    : 'Delete Message?'}
+                </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Choose how you want to delete this message.
+                  {allSelectedFromMe
+                    ? 'You can delete for everyone or just for yourself.'
+                    : 'Messages from others can only be deleted for you.'}
                 </p>
               </div>
             </div>
 
             <div className="space-y-2 pt-1">
-              <button
-                type="button"
-                onClick={() => handleConfirmDeleteMessage(false)}
-                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-left transition-colors cursor-pointer flex items-center justify-between"
-              >
-                <span>Delete for Everyone</span>
-                <span className="text-[10px] text-slate-400">WhatsApp style</span>
-              </button>
+              {allSelectedFromMe && (
+                <button
+                  type="button"
+                  onClick={() => handleExecuteDelete('everyone')}
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-950/60 text-left transition-colors cursor-pointer flex items-center justify-between"
+                >
+                  <span>Delete for Everyone</span>
+                  <span className="text-[10px] text-rose-500/80">Deleted for both</span>
+                </button>
+              )}
 
               <button
                 type="button"
-                onClick={() => handleConfirmDeleteMessage(true)}
-                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-950/60 text-left transition-colors cursor-pointer flex items-center justify-between"
+                onClick={() => handleExecuteDelete('forMe')}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-100 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-left transition-colors cursor-pointer flex items-center justify-between"
               >
-                <span>Delete Permanently</span>
-                <span className="text-[10px] text-rose-500">Remove document</span>
+                <span>Delete for Me</span>
+                <span className="text-[10px] text-slate-400">Only from your screen</span>
               </button>
             </div>
 
             <div className="pt-2 text-right">
               <button
                 type="button"
-                onClick={() => setMessageToDelete(null)}
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeleteTargetMessages([]);
+                }}
                 className="px-4 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
               >
                 Cancel
@@ -458,7 +640,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         </div>
       )}
 
-      {/* Clear Chat Confirmation Modal */}
+      {/* Clear Chat Confirmation Modal (WhatsApp Style) */}
       {confirmClearModal && (
         <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
@@ -467,12 +649,24 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 <RotateCcw size={20} />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Clear Chat Messages?</h3>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Clear Chat?</h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  This will delete all messages in this conversation for both participants.
+                  Are you sure you want to clear messages in this chat?
                 </p>
               </div>
             </div>
+
+            <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={clearChatDeleteMyForEveryone}
+                onChange={(e) => setClearChatDeleteMyForEveryone(e.target.checked)}
+                className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-xs text-slate-700 dark:text-slate-300">
+                Also delete messages I sent for everyone (recipient's messages will remain for them).
+              </span>
+            </label>
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
@@ -487,7 +681,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 onClick={handleConfirmClearChat}
                 className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs cursor-pointer"
               >
-                Clear All
+                Clear Chat
               </button>
             </div>
           </div>
@@ -530,104 +724,142 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         </div>
       )}
 
-      {/* Chat Room Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#151b28]/95 backdrop-blur-md sticky top-0 z-20 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          {/* Back button (on mobile view) */}
-          {onBack && (
+      {/* Chat Room Header / Selection Bar */}
+      {selectedMessageIds.size > 0 ? (
+        <div className="flex items-center justify-between px-4 py-3 border-b border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/95 dark:bg-indigo-950/80 backdrop-blur-md sticky top-0 z-20 shrink-0 animate-in fade-in duration-150">
+          <div className="flex items-center gap-3">
             <button
-              onClick={onBack}
-              className="p-1.5 -ml-1 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
-              aria-label="Back to conversations"
+              type="button"
+              onClick={handleClearSelection}
+              className="p-1.5 -ml-1 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Close selection"
             >
-              <ArrowLeft size={20} />
+              <X size={20} />
             </button>
-          )}
+            <span className="text-sm sm:text-base font-bold text-indigo-950 dark:text-indigo-100 flex items-center gap-1.5">
+              <CheckSquare size={17} className="text-indigo-600 dark:text-indigo-400" />
+              <span>{selectedMessageIds.size} Selected</span>
+            </span>
+          </div>
 
-          <UserAvatar
-            name={friend.name}
-            photoURL={friend.photoURL}
-            avatarColor={friend.avatarColor}
-            avatarIcon={friend.avatarIcon}
-            size="md"
-            showOnlineStatus
-          />
-
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                {friend.name}
-              </h3>
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                {formatChatCodeDisplay(friend.chatCode)}
-              </span>
-            </div>
-            <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
-              <ShieldCheck size={12} className="text-emerald-500" />
-              <span>Real-Time Encrypted</span>
-            </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleCopySelected}
+              className="p-2 rounded-xl text-slate-700 dark:text-slate-200 hover:bg-white/80 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Copy selected text"
+            >
+              <Copy size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenDeleteSelected}
+              className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-950/60 transition-colors cursor-pointer"
+              title="Delete selected messages"
+            >
+              <Trash2 size={18} />
+            </button>
           </div>
         </div>
-
-        {/* Right Header Controls */}
-        <div className="flex items-center gap-2 relative">
-          <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
-            <Lock size={11} />
-            Encrypted
-          </span>
-
-          {/* More options menu button */}
-          <button
-            type="button"
-            onClick={() => setShowMenuDropdown(!showMenuDropdown)}
-            className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="Chat options"
-          >
-            <MoreVertical size={18} />
-          </button>
-
-          {/* Dropdown Menu */}
-          {showMenuDropdown && (
-            <div className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
+      ) : (
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-[#151b28]/95 backdrop-blur-md sticky top-0 z-20 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Back button (on mobile view) */}
+            {onBack && (
               <button
-                type="button"
-                onClick={() => {
-                  fileInputRef.current?.click();
-                  setShowMenuDropdown(false);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
+                onClick={onBack}
+                className="p-1.5 -ml-1 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 dark:hover:text-white transition-colors cursor-pointer"
+                aria-label="Back to conversations"
               >
-                <ImageIcon size={14} className="text-indigo-500" />
-                <span>Send Photo</span>
+                <ArrowLeft size={20} />
               </button>
+            )}
 
-              <button
-                type="button"
-                onClick={() => {
-                  setShowMenuDropdown(false);
-                  setConfirmClearModal(true);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-xl transition-colors cursor-pointer"
-              >
-                <RotateCcw size={14} />
-                <span>Clear All Messages</span>
-              </button>
+            <UserAvatar
+              name={friend.name}
+              photoURL={friend.photoURL}
+              avatarColor={friend.avatarColor}
+              avatarIcon={friend.avatarIcon}
+              size="md"
+              showOnlineStatus
+            />
 
-              <button
-                type="button"
-                onClick={() => {
-                  setShowMenuDropdown(false);
-                  setConfirmDeleteChatModal(true);
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
-              >
-                <Trash2 size={14} />
-                <span>Delete Chat</span>
-              </button>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
+                  {friend.name}
+                </h3>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                  {formatChatCodeDisplay(friend.chatCode)}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
+                <ShieldCheck size={12} className="text-emerald-500" />
+                <span>Real-Time Encrypted</span>
+              </div>
             </div>
-          )}
+          </div>
+
+          {/* Right Header Controls */}
+          <div className="flex items-center gap-2 relative">
+            <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
+              <Lock size={11} />
+              Encrypted
+            </span>
+
+            {/* More options menu button */}
+            <button
+              type="button"
+              onClick={() => setShowMenuDropdown(!showMenuDropdown)}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="Chat options"
+            >
+              <MoreVertical size={18} />
+            </button>
+
+            {/* Dropdown Menu */}
+            {showMenuDropdown && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    fileInputRef.current?.click();
+                    setShowMenuDropdown(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
+                >
+                  <ImageIcon size={14} className="text-indigo-500" />
+                  <span>Send Photo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenuDropdown(false);
+                    setConfirmClearModal(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-xl transition-colors cursor-pointer"
+                >
+                  <RotateCcw size={14} />
+                  <span>Clear Chat</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenuDropdown(false);
+                    setConfirmDeleteChatModal(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
+                >
+                  <Trash2 size={14} />
+                  <span>Delete Entire Chat</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Messages Scroll Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 bg-slate-50/60 dark:bg-[#0b0f19]/70">
@@ -639,7 +871,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
           </div>
         </div>
 
-        {messages.length === 0 ? (
+        {visibleMessages.length === 0 ? (
           <div className="text-center py-16 sm:py-24">
             <div className="w-14 h-14 rounded-2xl bg-indigo-100 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto mb-3">
               <Smile size={28} />
@@ -652,14 +884,26 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             </p>
           </div>
         ) : (
-          messages.map((msg) => {
+          visibleMessages.map((msg) => {
             const isMe = msg.senderId === currentUser.uid;
             const isDeleted = msg.isDeleted;
+            const isSelected = selectedMessageIds.has(msg.id);
 
             return (
               <div
                 key={msg.id}
-                className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'} relative`}
+                onTouchStart={() => handleMessageTouchStart(msg)}
+                onTouchEnd={handleMessageTouchEnd}
+                onTouchCancel={handleMessageTouchEnd}
+                onMouseDown={() => handleMessageTouchStart(msg)}
+                onMouseUp={handleMessageTouchEnd}
+                onMouseLeave={handleMessageTouchEnd}
+                onClick={() => handleMessageClick(msg)}
+                className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'} relative transition-colors duration-150 rounded-2xl p-1 select-none ${
+                  isSelected
+                    ? 'bg-indigo-100/70 dark:bg-indigo-950/50 ring-2 ring-indigo-500/50'
+                    : ''
+                }`}
               >
                 <div
                   className={`flex items-end gap-2 max-w-[88%] sm:max-w-[75%] ${
@@ -701,14 +945,16 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                         {msg.type === 'image' && msg.mediaUrl && (
                           <div className="space-y-1.5">
                             <div
-                              onClick={() =>
+                              onClick={(e) => {
+                                if (selectedMessageIds.size > 0) return;
+                                e.stopPropagation();
                                 setLightboxImage({
                                   url: msg.mediaUrl!,
                                   senderName: msg.senderName,
                                   timestamp: msg.timestamp,
                                   caption: msg.text
-                                })
-                              }
+                                });
+                              }}
                               className="cursor-pointer overflow-hidden rounded-xl max-w-sm max-h-72 bg-black/5 hover:opacity-95 transition-opacity"
                             >
                               <img
@@ -740,21 +986,36 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                           <p className="whitespace-pre-wrap break-words px-1">{msg.text}</p>
                         )}
 
-                        {/* Time & Read Checkmark */}
+                        {/* Time & Read Checkmark (1 tick for sent, 2 ticks for seen) */}
                         <div
-                          className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] ${
+                          className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${
                             isMe ? 'text-white/80' : 'text-slate-400 dark:text-slate-400'
                           }`}
                         >
                           <span>{formatMsgTime(msg.timestamp)}</span>
-                          {isMe && <Check size={12} className="text-white/80" />}
+                          {isMe && (
+                            <span
+                              className="inline-flex items-center ml-0.5"
+                              title={
+                                msg.readBy && msg.readBy.some((id) => id !== currentUser.uid)
+                                  ? 'Seen (2 ticks)'
+                                  : 'Sent (1 tick)'
+                              }
+                            >
+                              {msg.readBy && msg.readBy.some((id) => id !== currentUser.uid) ? (
+                                <CheckCheck size={14} className="text-sky-300 dark:text-sky-300 stroke-[2.5]" />
+                              ) : (
+                                <Check size={13} className="text-white/70 stroke-[2]" />
+                              )}
+                            </span>
+                          )}
                         </div>
                       </>
                     )}
                   </div>
 
                   {/* Actions hover: Copy, React, Delete */}
-                  {!isDeleted && (
+                  {!isDeleted && selectedMessageIds.size === 0 && (
                     <div
                       className={`opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 self-center ${
                         isMe ? 'flex-row-reverse' : 'flex-row'
@@ -763,7 +1024,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                       {msg.text && (
                         <button
                           type="button"
-                          onClick={() => handleCopyMessage(msg)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyMessage(msg);
+                          }}
                           className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 cursor-pointer"
                           title="Copy text"
                         >
@@ -773,7 +1037,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => toggleMessageReaction(chatId, msg.id, '❤️', currentUser.uid)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleMessageReaction(chatId, msg.id, '❤️', currentUser.uid);
+                        }}
                         className="p-1 rounded-md text-slate-400 hover:text-rose-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
                         title="React with heart"
                       >
@@ -781,7 +1048,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => toggleMessageReaction(chatId, msg.id, '👍', currentUser.uid)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleMessageReaction(chatId, msg.id, '👍', currentUser.uid);
+                        }}
                         className="p-1 rounded-md text-slate-400 hover:text-indigo-500 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 text-xs cursor-pointer"
                         title="React with thumbs up"
                       >
@@ -791,7 +1061,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                       {/* Delete Message Button */}
                       <button
                         type="button"
-                        onClick={() => setMessageToDelete(msg)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenDeleteSingle(msg);
+                        }}
                         className="p-1 rounded-md text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 bg-white dark:bg-slate-800 shadow-2xs border border-slate-200 dark:border-slate-700 cursor-pointer"
                         title="Delete Message"
                       >

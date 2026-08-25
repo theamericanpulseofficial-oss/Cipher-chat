@@ -105,7 +105,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
             <ShieldCheck size={26} />
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-            CipherChat
+            UP1CHATBOX
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Private code-based real-time messaging

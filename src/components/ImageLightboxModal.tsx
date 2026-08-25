@@ -31,7 +31,7 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
   const handleDownload = () => {
     const a = document.createElement('a');
     a.href = imageUrl;
-    a.download = `cipherchat_photo_${Date.now()}.jpg`;
+    a.download = `up1chatbox_photo_${Date.now()}.jpg`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
