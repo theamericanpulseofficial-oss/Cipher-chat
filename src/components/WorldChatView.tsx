@@ -29,8 +29,7 @@ import { playMessageSentSound, playMessageReceivedSound } from '../utils/audio';
 import { UserAvatar, VerifiedBadge } from './UserAvatar';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
 import { ImageLightboxModal } from './ImageLightboxModal';
-import { ImageCropperModal } from './ImageCropperModal';
-import { startVoiceRecording, VoiceRecorderSession } from '../utils/media';
+import { startVoiceRecording, VoiceRecorderSession, compressImageFile } from '../utils/media';
 
 interface WorldChatViewProps {
   currentUser: UserProfile;
@@ -50,8 +49,6 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
 
   // Photo sending & Lightbox state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [rawPhotoForCrop, setRawPhotoForCrop] = useState<string | null>(null);
-  const [showCropperModal, setShowCropperModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [imageCaption, setImageCaption] = useState('');
   const [lightboxImage, setLightboxImage] = useState<{
@@ -150,8 +147,8 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
     }
   };
 
-  // Handle photo pick -> Cropper
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle photo pick -> Direct Preview & Send
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
@@ -161,22 +158,16 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
     }
 
     const file = files[0];
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setRawPhotoForCrop(reader.result);
-        setShowCropperModal(true);
-      }
-    };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleCropComplete = (croppedBase64: string) => {
-    setShowCropperModal(false);
-    setRawPhotoForCrop(null);
-    setPreviewImage(croppedBase64);
-    setImageCaption('');
+    try {
+      const compressed = await compressImageFile(file, 1280, 1280, 0.85);
+      setPreviewImage(compressed);
+      setImageCaption('');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to load image', 'error');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const handleConfirmSendPhoto = async () => {
@@ -284,22 +275,6 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
 
   return (
     <div className="h-[calc(100dvh-8.5rem)] md:h-[calc(100vh-2rem)] max-w-5xl mx-auto p-2 sm:p-4 lg:p-6 flex flex-col">
-      {/* Photo Crop Modal */}
-      {showCropperModal && rawPhotoForCrop && (
-        <ImageCropperModal
-          imageSrc={rawPhotoForCrop}
-          isOpen={showCropperModal}
-          aspectRatio="free"
-          isCircularMask={false}
-          title="Crop Photo for World Chat"
-          onCropComplete={handleCropComplete}
-          onClose={() => {
-            setShowCropperModal(false);
-            setRawPhotoForCrop(null);
-          }}
-        />
-      )}
-
       {/* Lightbox Modal */}
       {lightboxImage && (
         <ImageLightboxModal
@@ -478,6 +453,7 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
                     <UserAvatar
                       name={msg.senderName}
                       photoURL={msg.senderPhotoURL}
+                      isVerified={isMe ? currentUser.isVerified : msg.senderIsVerified}
                       size="sm"
                     />
                   </div>
@@ -486,8 +462,11 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
                   <div className={`flex flex-col max-w-[85%] sm:max-w-[75%] ${isMe ? 'items-end' : 'items-start'}`}>
                     {/* Sender Name & Expiry Tag */}
                     <div className="flex items-center gap-1.5 px-1 mb-1 text-[11px]">
-                      <span className="font-bold text-slate-800 dark:text-slate-200">
-                        {isMe ? 'You' : msg.senderName}
+                      <span className="font-bold text-slate-800 dark:text-slate-200 inline-flex items-center gap-1">
+                        <span>{isMe ? 'You' : msg.senderName}</span>
+                        {(isMe ? currentUser.isVerified : msg.senderIsVerified) && (
+                          <VerifiedBadge size={13} />
+                        )}
                       </span>
                       <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono flex items-center gap-0.5">
                         <Clock size={10} />

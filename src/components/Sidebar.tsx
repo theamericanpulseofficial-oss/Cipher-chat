@@ -13,7 +13,7 @@ import {
 import { NavTab, UserProfile } from '../types';
 import { useTheme } from '../context/ThemeContext';
 import { formatChatCodeDisplay } from '../services/chatService';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, VerifiedBadge } from './UserAvatar';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -151,12 +151,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               photoURL={user.photoURL}
               avatarColor={user.avatarColor}
               avatarIcon={user.avatarIcon}
+              isVerified={user.isVerified}
               size="md"
               showOnlineStatus
             />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold truncate text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                {user.name}
+              <p className="text-sm font-bold truncate text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors flex items-center gap-1">
+                <span>{user.name}</span>
+                {user.isVerified && <VerifiedBadge size={14} />}
               </p>
               <p className="text-xs text-slate-400 font-mono truncate">
                 Code: {formatChatCodeDisplay(user.chatCode)}
@@ -215,6 +217,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               photoURL={user.photoURL}
               avatarColor={user.avatarColor}
               avatarIcon={user.avatarIcon}
+              isVerified={user.isVerified}
               size="sm"
             />
           </div>

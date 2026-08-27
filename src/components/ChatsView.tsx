@@ -16,7 +16,7 @@ import {
 import { UserProfile, ChatConversation } from '../types';
 import { useTheme } from '../context/ThemeContext';
 import { formatChatCodeDisplay, deleteConversation } from '../services/chatService';
-import { UserAvatar, GroupAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar, VerifiedBadge } from './UserAvatar';
 import { ChatRoomView } from './ChatRoomView';
 import { useToast } from './Toast';
 
@@ -234,6 +234,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                           photoURL={friend.photoURL}
                           avatarColor={friend.avatarColor}
                           avatarIcon={friend.avatarIcon}
+                          isVerified={friend.isVerified}
                           size="md"
                           showOnlineStatus
                         />
@@ -241,8 +242,9 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1 mb-0.5">
-                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {displayName}
+                          <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                            <span>{displayName}</span>
+                            {!isGroup && friend.isVerified && <VerifiedBadge size={13} />}
                           </h4>
                           <span className="text-[10px] text-slate-400 font-mono shrink-0">
                             {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}
@@ -396,6 +398,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                         photoURL={friend.photoURL}
                         avatarColor={friend.avatarColor}
                         avatarIcon={friend.avatarIcon}
+                        isVerified={friend.isVerified}
                         size="lg"
                         showOnlineStatus
                       />
@@ -404,8 +407,9 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <div className="flex items-center gap-2 min-w-0">
-                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {displayName}
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                            <span>{displayName}</span>
+                            {!isGroup && friend.isVerified && <VerifiedBadge size={15} />}
                           </h4>
                           {isGroup ? (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">

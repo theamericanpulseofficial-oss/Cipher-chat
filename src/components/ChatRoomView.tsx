@@ -17,7 +17,9 @@ import {
   Download,
   AlertTriangle,
   RotateCcw,
-  CheckSquare
+  CheckSquare,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { UserProfile, ChatConversation, ChatMessage } from '../types';
 import { useTheme } from '../context/ThemeContext';
@@ -34,13 +36,13 @@ import {
   deleteConversation,
   markChatAsRead,
   toggleMessageReaction,
-  formatChatCodeDisplay
+  formatChatCodeDisplay,
+  markViewOnceAsViewed
 } from '../services/chatService';
 import { playMessageSentSound, playMessageReceivedSound } from '../utils/audio';
-import { UserAvatar, GroupAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar, VerifiedBadge } from './UserAvatar';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
 import { ImageLightboxModal } from './ImageLightboxModal';
-import { ImageCropperModal } from './ImageCropperModal';
 import { compressImageFile, startVoiceRecording, VoiceRecorderSession } from '../utils/media';
 
 interface ChatRoomViewProps {
@@ -76,12 +78,17 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const isLongPressActiveRef = useRef(false);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Photo sending & Lightbox state
+  // Photo sending, Lightbox & 1-Time Photo state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [rawPhotoForCrop, setRawPhotoForCrop] = useState<string | null>(null);
-  const [showCropperModal, setShowCropperModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [imageCaption, setImageCaption] = useState('');
+  const [isViewOnce, setIsViewOnce] = useState(false);
+  const [viewOnceModal, setViewOnceModal] = useState<{
+    messageId: string;
+    url: string;
+    senderName?: string;
+    timestamp?: number;
+  } | null>(null);
   const [lightboxImage, setLightboxImage] = useState<{
     url: string;
     senderName?: string;
@@ -188,22 +195,17 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // Handle image selection -> Open Cropper
+  // Handle image selection -> Direct compression & Preview
   const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     const file = files[0];
     try {
-      showToast('Loading photo for cropping...', 'info');
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setRawPhotoForCrop(reader.result);
-          setShowCropperModal(true);
-        }
-      };
-      reader.readAsDataURL(file);
+      const compressed = await compressImageFile(file, 1280, 1280, 0.85);
+      setPreviewImage(compressed);
+      setImageCaption('');
+      setIsViewOnce(false);
     } catch (err) {
       console.error(err);
       showToast('Could not load image. Please select a valid photo.', 'error');
@@ -212,25 +214,26 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
     }
   };
 
-  // When crop is confirmed
-  const handleChatCropComplete = (croppedBase64: string) => {
-    setShowCropperModal(false);
-    setRawPhotoForCrop(null);
-    setPreviewImage(croppedBase64);
-    setImageCaption('');
-  };
-
-  // Send photo message
+  // Send photo message (supports 1-Time Photo / View Once)
   const handleConfirmSendImage = async () => {
     if (!previewImage || isSending) return;
     setIsSending(true);
 
     try {
       if (soundEnabled) playMessageSentSound();
-      await sendImageMessage(chatId, currentUser, friendUid, previewImage, imageCaption.trim());
+      await sendImageMessage(
+        chatId,
+        currentUser,
+        friendUid,
+        previewImage,
+        imageCaption.trim(),
+        isViewOnce
+      );
+      const viewOnceFlag = isViewOnce;
       setPreviewImage(null);
       setImageCaption('');
-      showToast('Photo sent!', 'success');
+      setIsViewOnce(false);
+      showToast(viewOnceFlag ? '1-Time Photo sent!' : 'Photo sent!', 'success');
     } catch (err) {
       console.error(err);
       showToast('Failed to send photo.', 'error');
@@ -521,22 +524,6 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         className="hidden"
       />
 
-      {/* Image Cropper Modal for Chat Photos */}
-      {showCropperModal && rawPhotoForCrop && (
-        <ImageCropperModal
-          imageSrc={rawPhotoForCrop}
-          isOpen={showCropperModal}
-          aspectRatio="free"
-          isCircularMask={false}
-          title="Crop Photo Before Sending"
-          onCropComplete={handleChatCropComplete}
-          onClose={() => {
-            setShowCropperModal(false);
-            setRawPhotoForCrop(null);
-          }}
-        />
-      )}
-
       {/* Lightbox Modal */}
       {lightboxImage && (
         <ImageLightboxModal
@@ -548,7 +535,57 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         />
       )}
 
-      {/* Image Preview Modal before sending */}
+      {/* 1-Time Photo (View Once) Modal */}
+      {viewOnceModal && (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in duration-200 select-none">
+          {/* Top Bar */}
+          <div className="flex items-center justify-between p-3.5 sm:p-4 bg-black/90 backdrop-blur-md text-white border-b border-white/10 shrink-0">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setViewOnceModal(null)}
+                className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <ArrowLeft size={20} />
+              </button>
+              <div>
+                <h4 className="text-sm font-bold flex items-center gap-2">
+                  <span>{viewOnceModal.senderName || '1-Time Photo'}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500 text-white font-black font-mono tracking-wider">
+                    1-TIME VIEW
+                  </span>
+                </h4>
+                <p className="text-[10px] text-white/60">This photo will close and expire after viewing</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewOnceModal(null)}
+              className="px-4 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-bold transition-colors cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+
+          {/* Image View */}
+          <div className="flex-1 flex items-center justify-center p-2 sm:p-4 overflow-hidden relative">
+            <img
+              src={viewOnceModal.url}
+              alt="1-Time View"
+              className="max-h-[82vh] max-w-full object-contain select-none pointer-events-none rounded-lg"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+
+          {/* Bottom Banner */}
+          <div className="p-3 text-center bg-black/90 border-t border-white/10 text-white/70 text-xs font-medium shrink-0 flex items-center justify-center gap-2">
+            <Lock size={13} className="text-emerald-400" />
+            <span>1-Time Photo • Closes permanently upon exit</span>
+          </div>
+        </div>
+      )}
+
+      {/* Image Preview Modal before sending (with WhatsApp style 1-Time toggle) */}
       {previewImage && (
         <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#181f2e] border border-slate-200 dark:border-slate-700 rounded-2xl max-w-lg w-full p-4 sm:p-5 shadow-2xl flex flex-col gap-3.5 animate-in zoom-in-95 duration-150">
@@ -559,33 +596,70 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
               </h3>
               <button
                 type="button"
-                onClick={() => setPreviewImage(null)}
+                onClick={() => {
+                  setPreviewImage(null);
+                  setIsViewOnce(false);
+                }}
                 className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="max-h-[50vh] overflow-hidden rounded-xl bg-slate-950 flex items-center justify-center">
+            <div className="max-h-[50vh] overflow-hidden rounded-xl bg-slate-950 flex items-center justify-center relative">
               <img
                 src={previewImage}
                 alt="Selected preview"
                 className="max-h-[48vh] w-auto object-contain rounded-lg"
               />
+              {isViewOnce && (
+                <div className="absolute top-3 right-3 px-3 py-1 rounded-full bg-emerald-600/90 text-white text-xs font-extrabold backdrop-blur-sm shadow-md flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-white text-emerald-700 flex items-center justify-center font-mono text-[11px]">1</span>
+                  <span>1-Time Photo</span>
+                </div>
+              )}
             </div>
 
-            <input
-              type="text"
-              value={imageCaption}
-              onChange={(e) => setImageCaption(e.target.value)}
-              placeholder="Add an optional caption..."
-              className={`w-full py-2.5 px-3.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
-            />
+            {/* Input & WhatsApp style View Once Toggle */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsViewOnce(!isViewOnce)}
+                className={`shrink-0 w-10 h-10 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${
+                  isViewOnce
+                    ? 'bg-emerald-500 text-white border-emerald-400 shadow-md shadow-emerald-500/30 scale-105 ring-2 ring-emerald-400/40'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-emerald-500 hover:text-emerald-600'
+                }`}
+                title={isViewOnce ? '1-Time Photo enabled (Can be viewed only once)' : 'Set as 1-Time Photo (View Once)'}
+              >
+                <div className="w-5 h-5 rounded-full border-2 border-current flex items-center justify-center">
+                  <span className="font-mono text-[10px] font-black">1</span>
+                </div>
+              </button>
+
+              <input
+                type="text"
+                value={imageCaption}
+                onChange={(e) => setImageCaption(e.target.value)}
+                placeholder={isViewOnce ? '1-Time Photo (View Once)...' : 'Add an optional caption...'}
+                className={`flex-1 py-2.5 px-3.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+              />
+            </div>
+
+            {isViewOnce && (
+              <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 px-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>1-Time photo enabled: The recipient can view this photo only 1 time before it disappears.</span>
+              </p>
+            )}
 
             <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => setPreviewImage(null)}
+                onClick={() => {
+                  setPreviewImage(null);
+                  setIsViewOnce(false);
+                }}
                 className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 Cancel
@@ -597,7 +671,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50"
               >
                 <Send size={14} />
-                <span>{isSending ? 'Sending...' : 'Send Photo'}</span>
+                <span>{isSending ? 'Sending...' : isViewOnce ? 'Send 1-Time Photo' : 'Send Photo'}</span>
               </button>
             </div>
           </div>
@@ -807,15 +881,17 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                 photoURL={friend.photoURL}
                 avatarColor={friend.avatarColor}
                 avatarIcon={friend.avatarIcon}
+                isVerified={friend.isVerified}
                 size="md"
                 showOnlineStatus
               />
             )}
 
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  {isGroup ? groupName : friend.name}
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                  <span>{isGroup ? groupName : friend.name}</span>
+                  {!isGroup && friend.isVerified && <VerifiedBadge size={16} />}
                 </h3>
                 {!isGroup && (
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
@@ -952,6 +1028,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                         photoURL={msg.senderPhotoURL || senderUser?.photoURL}
                         avatarColor={senderUser?.avatarColor}
                         avatarIcon={senderUser?.avatarIcon}
+                        isVerified={senderUser?.isVerified || msg.senderIsVerified}
                         size="sm"
                       />
                     </div>
@@ -969,8 +1046,9 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                   >
                     {/* Sender name for group chats */}
                     {isGroup && !isMe && !isDeleted && (
-                      <span className="block text-[11px] font-bold text-indigo-600 dark:text-indigo-400 mb-1">
-                        {senderDisplayName}
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 mb-1">
+                        <span>{senderDisplayName}</span>
+                        {(senderUser?.isVerified || msg.senderIsVerified) && <VerifiedBadge size={12} />}
                       </span>
                     )}
 
@@ -984,33 +1062,135 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                       <>
                         {/* 1. PHOTO MESSAGE */}
                         {msg.type === 'image' && msg.mediaUrl && (
-                          <div className="space-y-1.5">
-                            <div
-                              onClick={(e) => {
-                                if (selectedMessageIds.size > 0) return;
-                                e.stopPropagation();
-                                setLightboxImage({
-                                  url: msg.mediaUrl!,
-                                  senderName: msg.senderName,
-                                  timestamp: msg.timestamp,
-                                  caption: msg.text
-                                });
-                              }}
-                              className="cursor-pointer overflow-hidden rounded-xl max-w-sm max-h-72 bg-black/5 hover:opacity-95 transition-opacity"
-                            >
-                              <img
-                                src={msg.mediaUrl}
-                                alt="Shared photo"
-                                className="w-full h-auto object-cover max-h-72 rounded-xl"
-                                referrerPolicy="no-referrer"
-                              />
-                            </div>
-                            {msg.text && (
-                              <p className="whitespace-pre-wrap break-words px-1 text-sm font-medium">
-                                {msg.text}
-                              </p>
+                          <>
+                            {/* WhatsApp Style 1-Time Photo (View Once) */}
+                            {msg.isViewOnce ? (
+                              <div className="py-0.5">
+                                {!isMe ? (
+                                  /* Receiver View */
+                                  msg.viewedBy && msg.viewedBy.includes(currentUser.uid) ? (
+                                    /* Already Opened (Expired) */
+                                    <div className="flex items-center gap-2.5 py-1 px-1.5 text-slate-400 dark:text-slate-400 select-none">
+                                      <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-slate-600 flex items-center justify-center font-mono text-xs font-bold text-slate-400">
+                                        ✓
+                                      </div>
+                                      <div className="flex flex-col">
+                                        <span className="text-xs font-bold text-slate-600 dark:text-slate-300">Opened</span>
+                                        <span className="text-[10px] text-slate-400 dark:text-slate-500">1-Time photo expired</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    /* Not Opened Yet: Clickable to View 1 Time */
+                                    <div className="space-y-1">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          if (selectedMessageIds.size > 0) return;
+                                          e.stopPropagation();
+                                          if (msg.mediaUrl) {
+                                            setViewOnceModal({
+                                              messageId: msg.id,
+                                              url: msg.mediaUrl,
+                                              senderName: senderDisplayName,
+                                              timestamp: msg.timestamp
+                                            });
+                                            markViewOnceAsViewed(chatId, msg.id, currentUser.uid);
+                                          }
+                                        }}
+                                        className="flex items-center gap-3 py-2 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-all cursor-pointer select-none group/viewonce shadow-xs text-left"
+                                      >
+                                        <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center font-mono font-black text-sm shadow-sm group-hover/viewonce:scale-105 transition-transform">
+                                          1
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-xs font-black text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                                            <span>Photo</span>
+                                            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 font-bold uppercase tracking-wider">
+                                              1-Time
+                                            </span>
+                                          </span>
+                                          <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                                            Tap to view (1 time only)
+                                          </span>
+                                        </div>
+                                      </button>
+                                      {msg.text && (
+                                        <p className="whitespace-pre-wrap break-words px-1 text-xs text-slate-700 dark:text-slate-300">
+                                          {msg.text}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )
+                                ) : (
+                                  /* Sender View */
+                                  msg.viewedBy && msg.viewedBy.some((id) => id !== currentUser.uid) ? (
+                                    /* Opened by Recipient */
+                                    <div className="flex items-center gap-2.5 py-1 px-1.5 text-white/80 select-none">
+                                      <div className="w-7 h-7 rounded-full border border-white/50 flex items-center justify-center font-mono text-xs font-bold text-white">
+                                        ✓
+                                      </div>
+                                      <div className="flex flex-col">
+                                        <span className="text-xs font-bold text-white">Opened</span>
+                                        <span className="text-[10px] text-white/70">1-Time photo viewed by recipient</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    /* Waiting for Recipient to Open */
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-2.5 py-1 px-1.5 text-white select-none">
+                                        <div className="w-7 h-7 rounded-full bg-white/20 border border-white/60 flex items-center justify-center font-mono text-xs font-black shadow-xs">
+                                          1
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-xs font-bold flex items-center gap-1.5">
+                                            <span>Photo</span>
+                                            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-white/20 text-white font-mono uppercase">
+                                              1-Time
+                                            </span>
+                                          </span>
+                                          <span className="text-[10px] text-white/80">1-time photo sent</span>
+                                        </div>
+                                      </div>
+                                      {msg.text && (
+                                        <p className="whitespace-pre-wrap break-words px-1 text-xs text-white/90">
+                                          {msg.text}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            ) : (
+                              /* Standard Photo Message with Lightbox */
+                              <div className="space-y-1.5">
+                                <div
+                                  onClick={(e) => {
+                                    if (selectedMessageIds.size > 0) return;
+                                    e.stopPropagation();
+                                    setLightboxImage({
+                                      url: msg.mediaUrl!,
+                                      senderName: msg.senderName,
+                                      timestamp: msg.timestamp,
+                                      caption: msg.text
+                                    });
+                                  }}
+                                  className="cursor-pointer overflow-hidden rounded-xl max-w-sm max-h-72 bg-black/5 hover:opacity-95 transition-opacity"
+                                >
+                                  <img
+                                    src={msg.mediaUrl}
+                                    alt="Shared photo"
+                                    className="w-full h-auto object-cover max-h-72 rounded-xl"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
+                                {msg.text && (
+                                  <p className="whitespace-pre-wrap break-words px-1 text-sm font-medium">
+                                    {msg.text}
+                                  </p>
+                                )}
+                              </div>
                             )}
-                          </div>
+                          </>
                         )}
 
                         {/* 2. AUDIO / VOICE MESSAGE */}

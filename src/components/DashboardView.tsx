@@ -29,7 +29,7 @@ import {
   normalizeChatCode
 } from '../services/chatService';
 import { playConnectSuccessSound } from '../utils/audio';
-import { UserAvatar, GroupAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar, VerifiedBadge } from './UserAvatar';
 
 interface DashboardViewProps {
   user: UserProfile;
@@ -158,13 +158,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               photoURL={user.photoURL}
               avatarColor={user.avatarColor}
               avatarIcon={user.avatarIcon}
+              isVerified={user.isVerified}
               size="lg"
               showOnlineStatus
             />
           </div>
           <div>
-            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-              Hello, {user.name}
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+              <span>Hello, {user.name}</span>
+              {user.isVerified && <VerifiedBadge size={22} />}
             </h2>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-normal flex items-center gap-1.5 mt-0.5">
               <ShieldCheck size={14} className="text-emerald-500" />
@@ -298,11 +300,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       photoURL={foundFriend.photoURL}
                       avatarColor={foundFriend.avatarColor}
                       avatarIcon={foundFriend.avatarIcon}
+                      isVerified={foundFriend.isVerified}
                       size="md"
                     />
                     <div className="min-w-0">
-                      <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                        {foundFriend.name}
+                      <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                        <span>{foundFriend.name}</span>
+                        {foundFriend.isVerified && <VerifiedBadge size={14} />}
                       </h4>
                       <p className="text-xs text-indigo-600 dark:text-indigo-400 font-mono">
                         Code: {formatChatCodeDisplay(foundFriend.chatCode)}
@@ -386,6 +390,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           photoURL={friend.photoURL}
                           avatarColor={friend.avatarColor}
                           avatarIcon={friend.avatarIcon}
+                          isVerified={friend.isVerified}
                           size="md"
                           showOnlineStatus
                         />
@@ -393,8 +398,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {displayName}
+                          <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                            <span>{displayName}</span>
+                            {!isGroup && friend.isVerified && <VerifiedBadge size={14} />}
                           </h4>
                           <span className="text-[11px] text-slate-400 shrink-0 font-medium">
                             {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}

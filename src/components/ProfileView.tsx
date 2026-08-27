@@ -21,7 +21,6 @@ import {
   X,
   KeyRound,
   Lock,
-  Crop,
   Send,
   AlertTriangle,
   FileText,
@@ -60,7 +59,7 @@ import {
 } from '../services/adminService';
 import { UserAvatar, VerifiedBadge } from './UserAvatar';
 import { PRESET_AVATARS } from '../utils/imageUtils';
-import { ImageCropperModal } from './ImageCropperModal';
+import { compressImageFile } from '../utils/media';
 
 interface ProfileViewProps {
   user: UserProfile;
@@ -122,10 +121,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
   const [adminPassInput, setAdminPassInput] = useState('');
   const [adminAuthError, setAdminAuthError] = useState(false);
-
-  // Cropper State for Profile Photo
-  const [rawPhotoForCrop, setRawPhotoForCrop] = useState<string | null>(null);
-  const [showCropperModal, setShowCropperModal] = useState(false);
 
   // Request Password Reset Modal
   const [showPasswordReqModal, setShowPasswordReqModal] = useState(false);
@@ -361,32 +356,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  // Handle Photo Selection -> Open Cropper
-  const handlePhotoFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Photo Selection -> Direct Upload & Compress
+  const handlePhotoFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setRawPhotoForCrop(reader.result);
-        setShowCropperModal(true);
-      }
-    };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  // Handle Apply Cropped Avatar
-  const handleAvatarCropApplied = async (croppedBase64: string) => {
-    setShowCropperModal(false);
-    setRawPhotoForCrop(null);
     setIsUploadingPhoto(true);
-
     try {
-      await updateUserProfile(user.uid, { photoURL: croppedBase64 });
-      user.photoURL = croppedBase64;
-      onProfileUpdated?.({ photoURL: croppedBase64 });
+      const compressed = await compressImageFile(file, 400, 400, 0.85);
+      await updateUserProfile(user.uid, { photoURL: compressed });
+      user.photoURL = compressed;
+      onProfileUpdated?.({ photoURL: compressed });
       showToast('Profile photo updated successfully!', 'success');
     } catch (err: unknown) {
       console.error(err);
@@ -394,6 +374,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       showToast(msg, 'error');
     } finally {
       setIsUploadingPhoto(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -527,22 +508,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 p-4 sm:p-6 lg:p-8">
-      {/* Interactive Image Cropper for Profile Photo */}
-      {showCropperModal && rawPhotoForCrop && (
-        <ImageCropperModal
-          imageSrc={rawPhotoForCrop}
-          isOpen={showCropperModal}
-          aspectRatio="square"
-          isCircularMask={true}
-          title="Crop Profile Photo"
-          onCropComplete={handleAvatarCropApplied}
-          onClose={() => {
-            setShowCropperModal(false);
-            setRawPhotoForCrop(null);
-          }}
-        />
-      )}
-
       {/* Set New Password Modal (When Admin Approves Password Change) */}
       {approvedPassReqToSet && (
         <div className="fixed inset-0 z-[115] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1065,7 +1030,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       )}
 
-      {/* Header - Triple Click Secret Trigger on Title or Authoritative Badge */}
+      {/* Header - Triple Click Secret Trigger on Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2
@@ -1079,29 +1044,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             Customize your profile photo, personal information, and Light/Dark display theme.
           </p>
         </div>
-
-        {/* AUTHORITATIVE System Badge (Red when locked for others, Green when open. 3 Clicks by Kailash toggles lock) */}
-        {isAdminLocked ? (
-          <button
-            type="button"
-            onClick={handleAuthoritativeBadgeTripleClick}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800 cursor-pointer select-none self-start hover:border-rose-500 hover:scale-105 transition-all active:scale-95 shadow-xs"
-            title={isMasterUser ? "Admin Access: BLOCKED for others (Kailash: Click 3x to UNLOCK)" : "AUTHORITATIVE [BLOCKED]"}
-          >
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-sm shadow-rose-500" />
-            <span>AUTHORITATIVE [LOCKED]</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleAuthoritativeBadgeTripleClick}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 cursor-pointer select-none self-start hover:border-emerald-500 hover:scale-105 transition-all active:scale-95 shadow-xs"
-            title={isMasterUser ? "Admin Access: OPEN for PIN 2026 (Kailash: Click 3x to BLOCK)" : "AUTHORITATIVE [OPEN]"}
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-sm shadow-emerald-400" />
-            <span>AUTHORITATIVE [OPEN]</span>
-          </button>
-        )}
       </div>
 
       {/* Master Phone Multi-Account Management (Exclusive to Kailash's Phone) */}
@@ -1289,8 +1231,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 disabled={isUploadingPhoto}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-xs cursor-pointer disabled:opacity-60"
               >
-                <Crop size={14} />
-                <span>Upload & Crop Photo</span>
+                <Upload size={14} />
+                <span>Upload Photo</span>
               </button>
 
               <button

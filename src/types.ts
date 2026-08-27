@@ -26,6 +26,7 @@ export interface ChatParticipant {
   photoURL?: string;
   avatarColor?: string;
   avatarIcon?: string;
+  isVerified?: boolean;
 }
 
 export type MessageType = 'text' | 'image' | 'audio';
@@ -58,10 +59,13 @@ export interface ChatMessage {
   senderId: string;
   senderName: string;
   senderPhotoURL?: string;
+  senderIsVerified?: boolean;
   text: string;
   type?: MessageType;
   mediaUrl?: string;
   mediaDuration?: number; // duration in seconds for audio voice messages
+  isViewOnce?: boolean; // WhatsApp style 1-time photo
+  viewedBy?: string[]; // userIds who opened this 1-time photo
   timestamp: number;
   readBy?: string[];
   reactions?: Record<string, string[]>; // emoji: [userIds]

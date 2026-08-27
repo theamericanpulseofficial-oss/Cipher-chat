@@ -121,14 +121,16 @@ export async function getOrCreateChatConversation(
         chatCode: currentUser.chatCode,
         photoURL: currentUser.photoURL || null,
         avatarColor: currentUser.avatarColor,
-        avatarIcon: currentUser.avatarIcon
+        avatarIcon: currentUser.avatarIcon,
+        isVerified: currentUser.isVerified || false
       },
       [`participants.${otherUser.uid}`]: {
         name: otherUser.name,
         chatCode: otherUser.chatCode,
         photoURL: otherUser.photoURL || null,
         avatarColor: otherUser.avatarColor,
-        avatarIcon: otherUser.avatarIcon
+        avatarIcon: otherUser.avatarIcon,
+        isVerified: otherUser.isVerified || false
       }
     });
 
@@ -152,14 +154,16 @@ export async function getOrCreateChatConversation(
         chatCode: currentUser.chatCode,
         photoURL: currentUser.photoURL || undefined,
         avatarColor: currentUser.avatarColor,
-        avatarIcon: currentUser.avatarIcon
+        avatarIcon: currentUser.avatarIcon,
+        isVerified: currentUser.isVerified || false
       },
       [otherUser.uid]: {
         name: otherUser.name,
         chatCode: otherUser.chatCode,
         photoURL: otherUser.photoURL || undefined,
         avatarColor: otherUser.avatarColor,
-        avatarIcon: otherUser.avatarIcon
+        avatarIcon: otherUser.avatarIcon,
+        isVerified: otherUser.isVerified || false
       }
     },
     unreadCounts: {
@@ -265,10 +269,13 @@ export function subscribeToChatMessages(
           senderId: data.senderId,
           senderName: data.senderName,
           senderPhotoURL: data.senderPhotoURL || undefined,
+          senderIsVerified: data.senderIsVerified || false,
           text: data.text || '',
           type: (data.type as MessageType) || 'text',
           mediaUrl: data.mediaUrl || undefined,
           mediaDuration: data.mediaDuration || undefined,
+          isViewOnce: Boolean(data.isViewOnce),
+          viewedBy: data.viewedBy || [],
           timestamp: data.timestamp || Date.now(),
           readBy: data.readBy || [],
           reactions: data.reactions || {},
@@ -295,6 +302,7 @@ export async function sendMessage(
     type?: MessageType;
     mediaUrl?: string;
     mediaDuration?: number;
+    isViewOnce?: boolean;
   }
 ): Promise<void> {
   const msgType = options.type || 'text';
@@ -313,7 +321,11 @@ export async function sendMessage(
   // Create preview text for conversation list
   let previewText = trimmedText;
   if (msgType === 'image') {
-    previewText = trimmedText ? `📷 ${trimmedText}` : '📷 Photo';
+    if (options.isViewOnce) {
+      previewText = '1️⃣ Photo';
+    } else {
+      previewText = trimmedText ? `📷 ${trimmedText}` : '📷 Photo';
+    }
   } else if (msgType === 'audio') {
     const dur = options.mediaDuration ? ` (${Math.round(options.mediaDuration)}s)` : '';
     previewText = `🎤 Voice message${dur}`;
@@ -324,10 +336,13 @@ export async function sendMessage(
     senderId: sender.uid,
     senderName: sender.name,
     senderPhotoURL: sender.photoURL || null,
+    senderIsVerified: sender.isVerified || false,
     text: trimmedText,
     type: msgType,
     mediaUrl: options.mediaUrl || null,
     mediaDuration: options.mediaDuration || null,
+    isViewOnce: Boolean(options.isViewOnce),
+    viewedBy: [],
     timestamp,
     readBy: [sender.uid],
     reactions: {},
@@ -375,13 +390,31 @@ export async function sendImageMessage(
   sender: UserProfile,
   receiverUid: string,
   imageDataUrl: string,
-  caption = ''
+  caption = '',
+  isViewOnce = false
 ): Promise<void> {
   return sendMessage(chatId, sender, receiverUid, {
     type: 'image',
     mediaUrl: imageDataUrl,
-    text: caption
+    text: caption,
+    isViewOnce
   });
+}
+
+// Mark 1-Time Photo as Viewed (WhatsApp style)
+export async function markViewOnceAsViewed(
+  chatId: string,
+  messageId: string,
+  viewerUid: string
+): Promise<void> {
+  try {
+    const messageDocRef = doc(db, 'chats', chatId, 'messages', messageId);
+    await updateDoc(messageDocRef, {
+      viewedBy: arrayUnion(viewerUid)
+    });
+  } catch (err) {
+    console.error('Error marking view once as viewed:', err);
+  }
 }
 
 // Send a Voice Audio Message

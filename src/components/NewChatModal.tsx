@@ -17,7 +17,7 @@ import {
   normalizeChatCode
 } from '../services/chatService';
 import { playConnectSuccessSound } from '../utils/audio';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, VerifiedBadge } from './UserAvatar';
 
 interface NewChatModalProps {
   currentUser: UserProfile;
@@ -165,11 +165,13 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({
                 photoURL={foundUser.photoURL}
                 avatarColor={foundUser.avatarColor}
                 avatarIcon={foundUser.avatarIcon}
+                isVerified={foundUser.isVerified}
                 size="md"
               />
               <div className="min-w-0">
-                <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                  {foundUser.name}
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate flex items-center gap-1">
+                  <span>{foundUser.name}</span>
+                  {foundUser.isVerified && <VerifiedBadge size={14} />}
                 </h4>
                 <p className="text-xs text-indigo-600 dark:text-indigo-400 font-mono">
                   {formatChatCodeDisplay(foundUser.chatCode)}
