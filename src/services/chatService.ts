@@ -19,12 +19,15 @@ import { UserProfile, ChatConversation, ChatMessage, MessageType } from '../type
 
 // Normalize user search code
 export function normalizeChatCode(code: string): string {
-  return code.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return (code || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 }
 
-// Format 6-character code nicely for UI (e.g. K8X-4P2)
+// Format 6-character code nicely for UI (e.g. NAV-EEN, KKK-KKK, K8X-4P2)
 export function formatChatCodeDisplay(code: string): string {
+  if (!code) return '';
   const clean = normalizeChatCode(code);
+  if (clean === 'NAVEEN') return 'NAV-EEN';
+  if (clean === 'KKKKKK') return 'KKK-KKK';
   if (clean.length === 6) {
     return `${clean.slice(0, 3)}-${clean.slice(3)}`;
   }
@@ -36,20 +39,35 @@ export function getChatId(uid1: string, uid2: string): string {
   return uid1 < uid2 ? `chat_${uid1}_${uid2}` : `chat_${uid2}_${uid1}`;
 }
 
-// Search for user by Chat Code
+// Search for user by Chat Code or Username
 export async function searchUserByCode(code: string, currentUserId: string): Promise<{ foundUser: UserProfile | null; error: string | null }> {
-  const normalized = normalizeChatCode(code);
-  if (!normalized || normalized.length < 4) {
-    return { foundUser: null, error: 'Please enter a valid chat code (e.g. ABC-123).' };
+  const trimmed = (code || '').trim();
+  const normalized = normalizeChatCode(trimmed);
+  const lowerName = trimmed.toLowerCase();
+
+  if (!normalized && !lowerName) {
+    return { foundUser: null, error: 'Please enter a valid chat code (e.g. NAV-EEN, KKK-KKK, ABC-123) or username.' };
   }
 
   try {
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('chatCode', '==', normalized));
-    const snapshot = await getDocs(q);
+    let snapshot = await getDocs(query(usersRef, where('chatCode', '==', normalized)));
+
+    // Try name query if code wasn't matched
+    if (snapshot.empty && lowerName) {
+      snapshot = await getDocs(query(usersRef, where('normalizedName', '==', lowerName)));
+    }
+
+    // Special check for Naveen and Kailash
+    if (snapshot.empty && (lowerName === 'naveen' || normalized === 'NAVEEN')) {
+      snapshot = await getDocs(query(usersRef, where('chatCode', '==', 'NAVEEN')));
+    }
+    if (snapshot.empty && (lowerName === 'kailash' || normalized === 'KKKKKK')) {
+      snapshot = await getDocs(query(usersRef, where('chatCode', '==', 'KKKKKK')));
+    }
 
     if (snapshot.empty) {
-      return { foundUser: null, error: `No user found with Chat Code "${formatChatCodeDisplay(normalized)}"` };
+      return { foundUser: null, error: `No user found with Chat Code "${formatChatCodeDisplay(normalized || trimmed)}"` };
     }
 
     const userDoc = snapshot.docs[0];
@@ -59,11 +77,16 @@ export async function searchUserByCode(code: string, currentUserId: string): Pro
       return { foundUser: null, error: 'You cannot connect with your own chat code.' };
     }
 
+    let finalChatCode = data.chatCode;
+    const nameLower = (data.name || '').trim().toLowerCase();
+    if (nameLower === 'naveen') finalChatCode = 'NAVEEN';
+    if (nameLower === 'kailash') finalChatCode = 'KKKKKK';
+
     return {
       foundUser: {
         uid: userDoc.id,
         name: data.name,
-        chatCode: data.chatCode,
+        chatCode: finalChatCode,
         email: data.email,
         photoURL: data.photoURL || undefined,
         avatarColor: data.avatarColor || 'bg-indigo-600',

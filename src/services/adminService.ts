@@ -16,6 +16,7 @@ import {
 import { db } from '../firebase';
 import { UserProfile, ChatConversation, ChatMessage, GroupRequest, PasswordResetRequest, NameChangeRequest } from '../types';
 import { hashPassword } from '../utils/crypto';
+import { getCustomChatCodeForName } from './authService';
 
 // Fetch all registered users in system
 export async function getAllUsers(): Promise<UserProfile[]> {
@@ -24,10 +25,11 @@ export async function getAllUsers(): Promise<UserProfile[]> {
     const snapshot = await getDocs(usersRef);
     const users: UserProfile[] = snapshot.docs.map((d) => {
       const data = d.data();
+      const customCode = getCustomChatCodeForName(data.name || '');
       return {
         uid: d.id,
         name: data.name || 'User',
-        chatCode: data.chatCode || '------',
+        chatCode: customCode || data.chatCode || '------',
         email: data.email,
         photoURL: data.photoURL || undefined,
         avatarColor: data.avatarColor || 'bg-indigo-600',
@@ -75,10 +77,16 @@ export async function adminUpdateUserName(uid: string, newName: string): Promise
   const trimmed = newName.trim();
   if (!trimmed) throw new Error('Name cannot be empty');
   const userDocRef = doc(db, 'users', uid);
-  await updateDoc(userDocRef, {
+  const customCode = getCustomChatCodeForName(trimmed);
+  const updates: Record<string, unknown> = {
     name: trimmed,
+    normalizedName: trimmed.toLowerCase(),
     updatedAt: Date.now()
-  });
+  };
+  if (customCode) {
+    updates.chatCode = customCode;
+  }
+  await updateDoc(userDocRef, updates);
 }
 
 // Admin deletes a user account permanently

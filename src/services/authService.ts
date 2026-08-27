@@ -122,6 +122,18 @@ export function getDeviceBoundAccount(): { uid: string; name: string } | null {
   }
 }
 
+// Get custom chat code for special designated usernames
+export function getCustomChatCodeForName(name: string): string | null {
+  const norm = (name || '').trim().toLowerCase();
+  if (norm === 'naveen') {
+    return 'NAVEEN'; // Formats as NAV-EEN in UI
+  }
+  if (norm === 'kailash') {
+    return 'KKKKKK'; // Formats as KKK-KKK in UI
+  }
+  return null;
+}
+
 // Generate unique 6-character chat code (e.g., K8X-4P2)
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -139,7 +151,11 @@ export function generateUniqueUserId(): string {
 }
 
 // Ensure chat code is truly unique in Firestore
-async function generateUniqueChatCode(): Promise<string> {
+export async function generateUniqueChatCode(name?: string): Promise<string> {
+  if (name) {
+    const custom = getCustomChatCodeForName(name);
+    if (custom) return custom;
+  }
   let attempts = 0;
   while (attempts < 10) {
     const candidate = generateRandomCode(6);
@@ -214,8 +230,9 @@ export async function signInWithGoogle(): Promise<UserProfile> {
   }
 
   // Create new profile for Google user
-  const chatCode = await generateUniqueChatCode();
   const displayName = user.displayName || user.email?.split('@')[0] || 'User';
+  const customChatCode = getCustomChatCodeForName(displayName);
+  const chatCode = customChatCode || await generateUniqueChatCode(displayName);
   const avatarColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   const avatarIcon = AVATAR_ICONS[Math.floor(Math.random() * AVATAR_ICONS.length)];
 
@@ -290,7 +307,8 @@ export async function registerUser(name: string, password: string, photoURL?: st
   }
 
   const passwordHash = await hashPassword(password);
-  const chatCode = await generateUniqueChatCode();
+  const customChatCode = getCustomChatCodeForName(trimmedName);
+  const chatCode = customChatCode || await generateUniqueChatCode(trimmedName);
   const uid = generateUniqueUserId();
 
   const avatarColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
@@ -404,20 +422,26 @@ export async function loginUser(identifier: string, password: string): Promise<U
   }
 
   const currentDeviceId = getOrCreateDeviceId();
+  const customChatCode = getCustomChatCodeForName(userData.name || trimmedInput);
+  const effectiveChatCode = customChatCode || userData.chatCode;
 
   try {
-    await updateDoc(doc(db, 'users', userDoc.id), {
+    const loginUpdates: Record<string, unknown> = {
       lastSeen: Date.now(),
       deviceId: userData.deviceId || currentDeviceId
-    });
+    };
+    if (customChatCode && userData.chatCode !== customChatCode) {
+      loginUpdates.chatCode = customChatCode;
+    }
+    await updateDoc(doc(db, 'users', userDoc.id), loginUpdates);
   } catch (e) {
-    console.warn('Could not update last seen:', e);
+    console.warn('Could not update login info:', e);
   }
 
   const profile: UserProfile = {
     uid: userDoc.id,
     name: userData.name || trimmedInput,
-    chatCode: userData.chatCode,
+    chatCode: effectiveChatCode,
     email: userData.email,
     photoURL: userData.photoURL || undefined,
     avatarColor: userData.avatarColor || 'bg-indigo-600',
@@ -461,10 +485,20 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     const userDoc = await getDoc(doc(db, 'users', uid));
     if (userDoc.exists()) {
       const data = userDoc.data();
+      const customChatCode = getCustomChatCodeForName(data.name || '');
+      const effectiveChatCode = customChatCode || data.chatCode;
+
+      // Auto-migrate chat code to custom one if missing or outdated
+      if (customChatCode && data.chatCode !== customChatCode) {
+        updateDoc(doc(db, 'users', uid), { chatCode: customChatCode }).catch((e) =>
+          console.warn('Auto-sync chatCode error:', e)
+        );
+      }
+
       return {
         uid: userDoc.id,
         name: data.name,
-        chatCode: data.chatCode,
+        chatCode: effectiveChatCode,
         email: data.email,
         photoURL: data.photoURL || undefined,
         avatarColor: data.avatarColor || 'bg-indigo-600',
@@ -522,6 +556,11 @@ export async function updateUserProfile(
 
     sanitizedUpdates.name = trimmedName;
     sanitizedUpdates.normalizedName = normalizedName;
+
+    const customCode = getCustomChatCodeForName(trimmedName);
+    if (customCode) {
+      sanitizedUpdates.chatCode = customCode;
+    }
   }
 
   if (updates.bio !== undefined) {
