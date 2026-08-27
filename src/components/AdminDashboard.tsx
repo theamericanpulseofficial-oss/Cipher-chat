@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldAlert,
   Users,
@@ -44,6 +44,8 @@ import {
   rejectGroupRequest,
   subscribeToPasswordRequests,
   resolvePasswordRequest,
+  approvePasswordRequest,
+  rejectPasswordRequest,
   setUserVerifiedStatus,
   setNameChangeLock,
   adminUpdateUserName,
@@ -53,7 +55,9 @@ import {
   subscribeToNameChangeRequests,
   approveNameChangeRequest,
   rejectNameChangeRequest,
-  deleteNameChangeRequest
+  deleteNameChangeRequest,
+  subscribeToAdminLockState,
+  toggleAdminLockState
 } from '../services/adminService';
 import { subscribeToChatMessages, formatChatCodeDisplay } from '../services/chatService';
 import { UserAvatar, VerifiedBadge } from './UserAvatar';
@@ -114,6 +118,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
     senderName?: string;
     caption?: string;
   } | null>(null);
+
+  const [isAdminLocked, setIsAdminLocked] = useState(false);
+  const badgeClickCountRef = useRef(0);
+  const lastBadgeClickTimeRef = useRef(0);
+
+  // Subscribe to global Admin Lock State
+  useEffect(() => {
+    const unsubLock = subscribeToAdminLockState((isLocked) => {
+      setIsAdminLocked(isLocked);
+    });
+    return () => unsubLock();
+  }, []);
+
+  // Triple Click on AUTHORITATIVE Badge to Toggle Admin Access Block/Open
+  const handleAuthoritativeBadgeTripleClick = async () => {
+    const normalizedName = (currentUser.name || '').trim().toLowerCase();
+    if (normalizedName !== 'kailash') {
+      showToast('Only Master Admin "Kailash" can toggle Admin Access Lock.', 'error');
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastBadgeClickTimeRef.current > 1500) {
+      badgeClickCountRef.current = 1;
+    } else {
+      const nextCount = badgeClickCountRef.current + 1;
+      badgeClickCountRef.current = nextCount;
+      if (nextCount >= 3) {
+        badgeClickCountRef.current = 0;
+        try {
+          const nextState = await toggleAdminLockState(currentUser.name);
+          if (nextState) {
+            showToast('🔴 Admin access BLOCKED for everyone! Only Kailash can access.', 'error');
+          } else {
+            showToast('🟢 Admin access UNLOCKED & OPEN for everyone with PIN 2026!', 'success');
+          }
+        } catch (err) {
+          console.error(err);
+          showToast('Failed to toggle admin lock state', 'error');
+        }
+      }
+    }
+    lastBadgeClickTimeRef.current = now;
+  };
 
   // Load initial data
   const loadPlatformData = async () => {
@@ -439,7 +487,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
     }
   };
 
-  // Resolve Password Request
+  // Resolve Password Request (Direct set by Admin)
   const handleResolvePasswordReq = async (req: PasswordResetRequest, customPass: string) => {
     if (!customPass || customPass.length < 4) {
       showToast('Please enter a valid password (min 4 characters)', 'error');
@@ -451,6 +499,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
     } catch (err) {
       console.error(err);
       showToast('Failed to reset password', 'error');
+    }
+  };
+
+  // Approve Password Request (Allow user to set their new password in profile)
+  const handleApprovePasswordReq = async (reqId: string, userName: string) => {
+    try {
+      await approvePasswordRequest(reqId);
+      showToast(`Approved! ${userName} can now set their new password from their profile.`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to approve password request', 'error');
+    }
+  };
+
+  // Reject Password Request
+  const handleRejectPasswordReq = async (reqId: string) => {
+    try {
+      await rejectPasswordRequest(reqId);
+      showToast('Password request rejected', 'info');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to reject password request', 'error');
     }
   };
 
@@ -852,10 +922,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
               <h1 className="text-lg sm:text-xl font-black tracking-tight text-white">
                 Admin Master Control
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                AUTHORITATIVE
-              </span>
+              {isAdminLocked ? (
+                <button
+                  type="button"
+                  onClick={handleAuthoritativeBadgeTripleClick}
+                  className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-950/90 text-rose-300 border border-rose-700/80 flex items-center gap-1.5 cursor-pointer select-none hover:border-rose-400 transition-all active:scale-95 shadow-xs"
+                  title="Admin Access: BLOCKED for others (Click 3x to toggle unlock)"
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-sm shadow-rose-500" />
+                  <span>AUTHORITATIVE [BLOCKED]</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleAuthoritativeBadgeTripleClick}
+                  className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950/90 text-emerald-300 border border-emerald-700/80 flex items-center gap-1.5 cursor-pointer select-none hover:border-emerald-400 transition-all active:scale-95 shadow-xs"
+                  title="Admin Access: OPEN for PIN 2026 (Click 3x to toggle block)"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400" />
+                  <span>AUTHORITATIVE [OPEN]</span>
+                </button>
+              )}
             </div>
             <p className="text-xs text-slate-400">
               Full real-time chat surveillance, user bans, permissions & group creation
@@ -1677,6 +1764,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                       <PasswordRequestCard
                         key={req.id}
                         req={req}
+                        onApprove={() => handleApprovePasswordReq(req.id, req.userName)}
+                        onReject={() => handleRejectPasswordReq(req.id)}
                         onResolve={(newPass) => handleResolvePasswordReq(req, newPass)}
                         onDelete={() => handleDeletePasswordReq(req.id)}
                       />
@@ -1809,12 +1898,14 @@ const NameRequestCard: React.FC<{
   );
 };
 
-// Subcomponent for Password Request Card with inline password setter
+// Subcomponent for Password Request Card with inline password setter and approval flow
 const PasswordRequestCard: React.FC<{
   req: PasswordResetRequest;
+  onApprove: () => void;
+  onReject: () => void;
   onResolve: (pass: string) => void;
   onDelete: () => void;
-}> = ({ req, onResolve, onDelete }) => {
+}> = ({ req, onApprove, onReject, onResolve, onDelete }) => {
   const [passInput, setPassInput] = useState('');
 
   return (
@@ -1832,6 +1923,10 @@ const PasswordRequestCard: React.FC<{
             className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
               req.status === 'completed'
                 ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                : req.status === 'approved'
+                ? 'bg-blue-950 text-blue-300 border border-blue-800'
+                : req.status === 'rejected'
+                ? 'bg-rose-950 text-rose-300 border border-rose-800'
                 : 'bg-amber-950 text-amber-300 border border-amber-800'
             }`}
           >
@@ -1856,26 +1951,55 @@ const PasswordRequestCard: React.FC<{
       )}
 
       {req.status === 'pending' ? (
-        <div className="flex items-center gap-2 pt-1">
-          <input
-            type="text"
-            value={passInput}
-            onChange={(e) => setPassInput(e.target.value)}
-            placeholder="Type new password for user"
-            className="flex-1 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-hidden"
-          />
-          <button
-            type="button"
-            disabled={!passInput.trim()}
-            onClick={() => onResolve(passInput.trim())}
-            className="px-4 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 cursor-pointer shrink-0"
-          >
-            Apply & Complete
-          </button>
+        <div className="space-y-2.5 pt-1">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onApprove}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer active:scale-95 transition-all"
+            >
+              <Check size={14} />
+              <span>Approve (Allow User to Set)</span>
+            </button>
+            <button
+              type="button"
+              onClick={onReject}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/30 cursor-pointer active:scale-95 transition-all"
+            >
+              <XCircle size={14} />
+              <span>Decline</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={passInput}
+              onChange={(e) => setPassInput(e.target.value)}
+              placeholder="Or direct set password here"
+              className="flex-1 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-hidden"
+            />
+            <button
+              type="button"
+              disabled={!passInput.trim()}
+              onClick={() => onResolve(passInput.trim())}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 cursor-pointer shrink-0"
+            >
+              Set Direct
+            </button>
+          </div>
         </div>
+      ) : req.status === 'approved' ? (
+        <p className="text-[11px] text-blue-400 font-semibold">
+          ✓ Approved: Waiting for user to submit their new password from Profile.
+        </p>
+      ) : req.status === 'rejected' ? (
+        <p className="text-[11px] text-rose-400 font-semibold">
+          ✕ Declined by Admin
+        </p>
       ) : (
         <p className="text-[11px] text-emerald-400 font-semibold">
-          ✓ Password successfully resolved by Admin
+          ✓ Password successfully resolved & saved
         </p>
       )}
     </div>

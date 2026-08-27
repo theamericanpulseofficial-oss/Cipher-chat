@@ -372,11 +372,14 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
             </div>
           ) : (
             filteredChats.map((chat) => {
+              const isGroup = Boolean(chat.isGroup);
+              const groupTitle = chat.groupName || 'Group Chat';
               const friendUid = chat.participantIds.find((id) => id !== user.uid) || user.uid;
               const friend = chat.participants[friendUid] || {
                 name: 'Unknown User',
                 chatCode: '??????'
               };
+              const displayName = isGroup ? groupTitle : friend.name;
               const unread = chat.unreadCounts?.[user.uid] || 0;
 
               return (
@@ -385,24 +388,34 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   className="flex items-center justify-between gap-3.5 p-4 hover:bg-slate-50 dark:hover:bg-slate-800/60 active:bg-slate-100 cursor-pointer transition-colors"
                 >
                   <div onClick={() => onOpenChat(chat.id)} className="flex items-center gap-3.5 flex-1 min-w-0">
-                    <UserAvatar
-                      name={friend.name}
-                      photoURL={friend.photoURL}
-                      avatarColor={friend.avatarColor}
-                      avatarIcon={friend.avatarIcon}
-                      size="lg"
-                      showOnlineStatus
-                    />
+                    {isGroup ? (
+                      <GroupAvatar size="lg" />
+                    ) : (
+                      <UserAvatar
+                        name={friend.name}
+                        photoURL={friend.photoURL}
+                        avatarColor={friend.avatarColor}
+                        avatarIcon={friend.avatarIcon}
+                        size="lg"
+                        showOnlineStatus
+                      />
+                    )}
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <div className="flex items-center gap-2 min-w-0">
                           <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {friend.name}
+                            {displayName}
                           </h4>
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
-                            {formatChatCodeDisplay(friend.chatCode)}
-                          </span>
+                          {isGroup ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/70 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                              GROUP
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                              {formatChatCodeDisplay(friend.chatCode)}
+                            </span>
+                          )}
                         </div>
 
                         <span className="text-[11px] text-slate-400 font-medium shrink-0">

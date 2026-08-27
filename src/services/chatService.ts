@@ -198,6 +198,11 @@ export function subscribeToUserChats(
         const data = d.data();
         return {
           id: d.id,
+          isGroup: Boolean(data.isGroup),
+          groupName: data.groupName || undefined,
+          groupDescription: data.groupDescription || undefined,
+          groupAvatar: data.groupAvatar || undefined,
+          adminUid: data.adminUid || undefined,
           participantIds: data.participantIds || [],
           participants: data.participants || {},
           lastMessage: data.lastMessage,

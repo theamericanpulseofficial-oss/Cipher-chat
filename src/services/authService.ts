@@ -24,6 +24,79 @@ import { normalizeChatCode } from './chatService';
 const SESSION_STORAGE_KEY = 'up1chatbox_active_uid';
 const DEVICE_ID_KEY = 'up1chatbox_device_id';
 const DEVICE_BOUND_ACCOUNT_KEY = 'up1chatbox_bound_user';
+const SAVED_ACCOUNTS_KEY = 'up1chatbox_saved_accounts';
+const MASTER_PHONE_KEY = 'up1chatbox_is_master_phone';
+
+// Check if this device is Kailash's Master Phone
+export function isMasterPhone(): boolean {
+  try {
+    return localStorage.getItem(MASTER_PHONE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// Mark device as master phone
+export function setMasterPhoneFlag(isMaster: boolean): void {
+  try {
+    if (isMaster) {
+      localStorage.setItem(MASTER_PHONE_KEY, 'true');
+    } else {
+      localStorage.removeItem(MASTER_PHONE_KEY);
+    }
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+// Get list of accounts saved on this device (for quick switching)
+export function getSavedAccounts(): UserProfile[] {
+  try {
+    const raw = localStorage.getItem(SAVED_ACCOUNTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Save or update an account in this device's saved accounts list
+export function saveAccountToDevice(profile: UserProfile): void {
+  try {
+    const current = getSavedAccounts();
+    const filtered = current.filter((a) => a.uid !== profile.uid);
+    const updated = [profile, ...filtered];
+    localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
+
+    // If this account is Kailash, automatically designate this device as master phone
+    if ((profile.name || '').trim().toLowerCase() === 'kailash') {
+      setMasterPhoneFlag(true);
+    }
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+// Remove an account from saved accounts list
+export function removeSavedAccountFromDevice(uid: string): void {
+  try {
+    const current = getSavedAccounts();
+    const updated = current.filter((a) => a.uid !== uid);
+    localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+// Switch active account on device
+export async function switchActiveAccount(uid: string): Promise<UserProfile | null> {
+  const profile = await getUserProfile(uid);
+  if (profile) {
+    localStorage.setItem(SESSION_STORAGE_KEY, uid);
+    saveAccountToDevice(profile);
+    return profile;
+  }
+  return null;
+}
 
 // Get or initialize persistent unique device ID
 export function getOrCreateDeviceId(): string {
@@ -193,13 +266,16 @@ export async function registerUser(name: string, password: string, photoURL?: st
     throw new Error('Password must be at least 6 characters.');
   }
 
-  // 1 Device per Account restriction
-  const boundAccount = getDeviceBoundAccount();
-  if (boundAccount && boundAccount.name) {
-    throw new Error(`This device has already created account "${boundAccount.name}". Only 1 account per device is permitted.`);
-  }
-
   const normalizedName = trimmedName.toLowerCase();
+  const isMasterUser = normalizedName === 'kailash' || isMasterPhone();
+
+  // 1 Device per Account restriction (Strict for other users, bypassed for Master phone)
+  if (!isMasterUser) {
+    const boundAccount = getDeviceBoundAccount();
+    if (boundAccount && boundAccount.name) {
+      throw new Error(`This device has already created account "${boundAccount.name}". Only 1 account per device is permitted.`);
+    }
+  }
 
   // Check if username is already registered in Firestore (case-insensitive check)
   const usersRef = collection(db, 'users');
@@ -260,11 +336,25 @@ export async function registerUser(name: string, password: string, photoURL?: st
 
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, uid);
-    localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
+    if (!isMasterUser) {
+      localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
+    }
+    saveAccountToDevice(profile);
   } catch (e) {
     console.warn('LocalStorage error:', e);
   }
 
+  return profile;
+}
+
+// Create an extra account on Master Phone without losing previous sessions
+export async function createExtraAccountOnDevice(
+  name: string,
+  password: string,
+  photoURL?: string
+): Promise<UserProfile> {
+  const profile = await registerUser(name, password, photoURL);
+  saveAccountToDevice(profile);
   return profile;
 }
 
@@ -303,10 +393,14 @@ export async function loginUser(identifier: string, password: string): Promise<U
     throw new Error('Incorrect password. Please try again.');
   }
 
-  // 1 Device per Account restriction check
-  const boundAccount = getDeviceBoundAccount();
-  if (boundAccount && boundAccount.uid && boundAccount.uid !== userDoc.id) {
-    throw new Error(`This device is already locked to account "${boundAccount.name}". 1 account per device policy is active.`);
+  const isMasterUser = normalizedInput === 'kailash' || (userData.name || '').trim().toLowerCase() === 'kailash' || isMasterPhone();
+
+  // 1 Device per Account restriction check (Bypassed on Master Phone)
+  if (!isMasterUser) {
+    const boundAccount = getDeviceBoundAccount();
+    if (boundAccount && boundAccount.uid && boundAccount.uid !== userDoc.id) {
+      throw new Error(`This device is already locked to account "${boundAccount.name}". 1 account per device policy is active.`);
+    }
   }
 
   const currentDeviceId = getOrCreateDeviceId();
@@ -343,11 +437,21 @@ export async function loginUser(identifier: string, password: string): Promise<U
 
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, userDoc.id);
-    localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
+    if (!isMasterUser) {
+      localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
+    }
+    saveAccountToDevice(profile);
   } catch (e) {
     console.warn('LocalStorage error:', e);
   }
 
+  return profile;
+}
+
+// Add an existing account to device list
+export async function addExistingAccountToDevice(identifier: string, password: string): Promise<UserProfile> {
+  const profile = await loginUser(identifier, password);
+  saveAccountToDevice(profile);
   return profile;
 }
 

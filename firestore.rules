@@ -35,6 +35,11 @@ service cloud.firestore {
     match /world_messages/{messageId} {
       allow read, write: if true;
     }
+
+    // System Config collection: Global admin lock state & app settings
+    match /systemConfig/{configId} {
+      allow read, write: if true;
+    }
   }
 }
 

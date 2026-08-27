@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Copy,
   Check,
@@ -23,15 +23,41 @@ import {
   Lock,
   Crop,
   Send,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  UserPlus,
+  Users,
+  Smartphone,
+  Plus,
+  ArrowRightLeft,
+  ShieldCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { UserProfile, ChatConversation } from '../types';
+import { UserProfile, ChatConversation, PasswordResetRequest, NameChangeRequest } from '../types';
 import { useTheme } from '../context/ThemeContext';
 import { useToast } from './Toast';
 import { formatChatCodeDisplay } from '../services/chatService';
-import { updateUserProfile } from '../services/authService';
-import { submitPasswordResetRequest, submitNameChangeRequest } from '../services/adminService';
+import {
+  updateUserProfile,
+  isMasterPhone,
+  getSavedAccounts,
+  saveAccountToDevice,
+  removeSavedAccountFromDevice,
+  switchActiveAccount,
+  createExtraAccountOnDevice,
+  addExistingAccountToDevice
+} from '../services/authService';
+import {
+  submitPasswordResetRequest,
+  submitNameChangeRequest,
+  subscribeToUserPasswordRequests,
+  subscribeToUserNameChangeRequests,
+  userSetNewPasswordWithApproval,
+  dismissUserPasswordRequest,
+  dismissUserNameChangeRequest,
+  subscribeToAdminLockState,
+  toggleAdminLockState
+} from '../services/adminService';
 import { UserAvatar, VerifiedBadge } from './UserAvatar';
 import { PRESET_AVATARS } from '../utils/imageUtils';
 import { ImageCropperModal } from './ImageCropperModal';
@@ -61,9 +87,38 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [showPresetModal, setShowPresetModal] = useState(false);
 
+  // User's own submitted requests (for real-time approval notification)
+  const [userPasswordRequests, setUserPasswordRequests] = useState<PasswordResetRequest[]>([]);
+  const [userNameRequests, setUserNameRequests] = useState<NameChangeRequest[]>([]);
+
+  // Modal for setting new password when password request is approved
+  const [approvedPassReqToSet, setApprovedPassReqToSet] = useState<PasswordResetRequest | null>(null);
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [isSubmittingNewPass, setIsSubmittingNewPass] = useState(false);
+
+  // Global Admin Access Lock State (Red when locked for others, Green when open)
+  const [isAdminLocked, setIsAdminLocked] = useState(false);
+
+  // Multi-Account Management on Master Phone
+  const [savedAccounts, setSavedAccounts] = useState<UserProfile[]>([]);
+  const [showCreateExtraAccountModal, setShowCreateExtraAccountModal] = useState(false);
+  const [extraAccountName, setExtraAccountName] = useState('');
+  const [extraAccountPassword, setExtraAccountPassword] = useState('');
+  const [isCreatingExtraAccount, setIsCreatingExtraAccount] = useState(false);
+
+  const [showAddExistingAccountModal, setShowAddExistingAccountModal] = useState(false);
+  const [existingIdentifier, setExistingIdentifier] = useState('');
+  const [existingPassword, setExistingPassword] = useState('');
+  const [isAddingExisting, setIsAddingExisting] = useState(false);
+
+  const isMasterUser = (user.name || '').trim().toLowerCase() === 'kailash' || isMasterPhone();
+
   // Triple-Click Admin Trigger
   const [clickCount, setClickCount] = useState(0);
   const lastClickTimeRef = useRef<number>(0);
+  const badgeClickCountRef = useRef<number>(0);
+  const lastBadgeClickTimeRef = useRef<number>(0);
+
   const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
   const [adminPassInput, setAdminPassInput] = useState('');
   const [adminAuthError, setAdminAuthError] = useState(false);
@@ -85,7 +140,38 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Secret Triple-Click on "Account Profile & Settings" / "Setting"
+  // Keep device saved accounts synchronized
+  useEffect(() => {
+    if (user.uid) {
+      saveAccountToDevice(user);
+      setSavedAccounts(getSavedAccounts());
+    }
+  }, [user]);
+
+  // Subscribe to real-time Admin Lock State
+  useEffect(() => {
+    const unsubLock = subscribeToAdminLockState((isLocked) => {
+      setIsAdminLocked(isLocked);
+    });
+    return () => unsubLock();
+  }, []);
+
+  // Subscribe to user's real-time requests
+  useEffect(() => {
+    if (!user.uid) return;
+    const unsubPass = subscribeToUserPasswordRequests(user.uid, (reqs) => {
+      setUserPasswordRequests(reqs);
+    });
+    const unsubName = subscribeToUserNameChangeRequests(user.uid, (reqs) => {
+      setUserNameRequests(reqs);
+    });
+    return () => {
+      unsubPass();
+      unsubName();
+    };
+  }, [user.uid]);
+
+  // Secret Triple-Click on "Account Profile & Settings" Title
   const handleHeaderTripleClick = () => {
     const now = Date.now();
     if (now - lastClickTimeRef.current > 1500) {
@@ -95,31 +181,164 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       setClickCount(nextCount);
       if (nextCount >= 3) {
         setClickCount(0);
-        // Security check: Only account named 'Kailash' (case-insensitive) can access Master Admin
-        const normalizedName = (user.name || '').trim().toLowerCase();
-        if (normalizedName === 'kailash') {
-          setShowAdminAuthModal(true);
-          setAdminPassInput('');
-          setAdminAuthError(false);
-        } else {
-          showToast('Access Denied: Only user "Kailash" is permitted to access the Master Admin Control. (Not Allowed)', 'error');
-        }
+        setShowAdminAuthModal(true);
+        setAdminPassInput('');
+        setAdminAuthError(false);
       }
     }
     lastClickTimeRef.current = now;
   };
 
+  // Triple-Click on "AUTHORITATIVE" Badge
+  // For Kailash -> Toggles Admin Access Lock (Red/Green)
+  // For others -> Opens 2026 Passcode modal
+  const handleAuthoritativeBadgeTripleClick = async () => {
+    const normalizedName = (user.name || '').trim().toLowerCase();
+    const now = Date.now();
+
+    if (normalizedName === 'kailash') {
+      if (now - lastBadgeClickTimeRef.current > 1500) {
+        badgeClickCountRef.current = 1;
+      } else {
+        const nextCount = badgeClickCountRef.current + 1;
+        badgeClickCountRef.current = nextCount;
+        if (nextCount >= 3) {
+          badgeClickCountRef.current = 0;
+          try {
+            const nextLocked = await toggleAdminLockState(user.name);
+            if (nextLocked) {
+              showToast('🔴 Admin access BLOCKED for everyone! Only Kailash can enter.', 'error');
+            } else {
+              showToast('🟢 Admin access UNLOCKED & OPEN for everyone with PIN 2026!', 'success');
+              confetti({
+                particleCount: 50,
+                spread: 70,
+                origin: { y: 0.6 }
+              });
+            }
+          } catch (err) {
+            console.error(err);
+            showToast('Failed to toggle admin lock status', 'error');
+          }
+        }
+      }
+      lastBadgeClickTimeRef.current = now;
+    } else {
+      // Normal user 3 clicks on badge opens passcode dialog
+      handleHeaderTripleClick();
+    }
+  };
+
   // Verify Admin Passcode (2026)
   const handleVerifyAdminPasscode = (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminPassInput.trim() === '2026') {
+    const enteredPin = adminPassInput.trim();
+    if (enteredPin === '2026') {
+      const normalizedName = (user.name || '').trim().toLowerCase();
+      // If access is locked for others, check if user is Kailash
+      if (isAdminLocked && normalizedName !== 'kailash') {
+        setAdminAuthError(true);
+        showToast('Access Blocked: Master Admin has locked admin access for other users.', 'error');
+        return;
+      }
+
       setShowAdminAuthModal(false);
       setAdminPassInput('');
-      showToast('Admin mode authenticated!', 'success');
+      showToast('Admin Mode Authenticated!', 'success');
       onEnterAdmin?.();
     } else {
       setAdminAuthError(true);
+      showToast('Incorrect Passcode. Access Denied.', 'error');
     }
+  };
+
+  // Switch to another account saved on this phone
+  const handleSwitchAccount = async (targetUid: string) => {
+    if (targetUid === user.uid) return;
+    try {
+      const switched = await switchActiveAccount(targetUid);
+      if (switched) {
+        onProfileUpdated?.(switched);
+        setSavedAccounts(getSavedAccounts());
+        showToast(`Switched active account to "${switched.name}"`, 'success');
+        confetti({
+          particleCount: 35,
+          spread: 50,
+          origin: { y: 0.7 }
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to switch account', 'error');
+    }
+  };
+
+  // Create an extra account directly on this master phone
+  const handleCreateExtraAccountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extraAccountName.trim() || extraAccountPassword.length < 6) {
+      showToast('Name must be at least 2 chars and Password 6+ chars', 'error');
+      return;
+    }
+
+    setIsCreatingExtraAccount(true);
+    try {
+      const newAcc = await createExtraAccountOnDevice(extraAccountName, extraAccountPassword);
+      onProfileUpdated?.(newAcc);
+      setSavedAccounts(getSavedAccounts());
+      setShowCreateExtraAccountModal(false);
+      setExtraAccountName('');
+      setExtraAccountPassword('');
+      showToast(`Account "${newAcc.name}" created and switched successfully!`, 'success');
+      confetti({
+        particleCount: 60,
+        spread: 80,
+        origin: { y: 0.6 }
+      });
+    } catch (err: unknown) {
+      console.error(err);
+      const msg = err instanceof Error ? err.message : 'Failed to create extra account';
+      showToast(msg, 'error');
+    } finally {
+      setIsCreatingExtraAccount(false);
+    }
+  };
+
+  // Add an existing account to this phone switcher
+  const handleAddExistingAccountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!existingIdentifier.trim() || !existingPassword) {
+      showToast('Please enter account identifier and password', 'error');
+      return;
+    }
+
+    setIsAddingExisting(true);
+    try {
+      const acc = await addExistingAccountToDevice(existingIdentifier, existingPassword);
+      onProfileUpdated?.(acc);
+      setSavedAccounts(getSavedAccounts());
+      setShowAddExistingAccountModal(false);
+      setExistingIdentifier('');
+      setExistingPassword('');
+      showToast(`Account "${acc.name}" added and switched!`, 'success');
+    } catch (err: unknown) {
+      console.error(err);
+      const msg = err instanceof Error ? err.message : 'Failed to add account';
+      showToast(msg, 'error');
+    } finally {
+      setIsAddingExisting(false);
+    }
+  };
+
+  // Remove an account from this phone's switcher list
+  const handleRemoveSavedAccount = (targetUid: string, targetName: string) => {
+    if (targetUid === user.uid) {
+      showToast('Cannot remove currently active account from switcher.', 'info');
+      return;
+    }
+    removeSavedAccountFromDevice(targetUid);
+    setSavedAccounts(getSavedAccounts());
+    showToast(`Removed "${targetName}" from phone account list`, 'info');
   };
 
   // Copy Chat Code
@@ -272,6 +491,34 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
+  // User sets their new password after Admin approval
+  const handleSetNewApprovedPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!approvedPassReqToSet) return;
+    if (newUserPassword.length < 4) {
+      showToast('Password must be at least 4 characters long.', 'error');
+      return;
+    }
+
+    try {
+      setIsSubmittingNewPass(true);
+      await userSetNewPasswordWithApproval(user.uid, approvedPassReqToSet.id, newUserPassword);
+      showToast('Password updated successfully! Keep it safe.', 'success');
+      confetti({
+        particleCount: 50,
+        spread: 70,
+        origin: { y: 0.7 }
+      });
+      setApprovedPassReqToSet(null);
+      setNewUserPassword('');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to update password. Please try again.', 'error');
+    } finally {
+      setIsSubmittingNewPass(false);
+    }
+  };
+
   const memberSince = new Date(user.createdAt || Date.now()).toLocaleDateString([], {
     year: 'numeric',
     month: 'long',
@@ -294,6 +541,260 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             setRawPhotoForCrop(null);
           }}
         />
+      )}
+
+      {/* Set New Password Modal (When Admin Approves Password Change) */}
+      {approvedPassReqToSet && (
+        <div className="fixed inset-0 z-[115] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
+                  <KeyRound size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Set Your New Password
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Approved by Admin. Enter your new secret password.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setApprovedPassReqToSet(null);
+                  setNewUserPassword('');
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSetNewApprovedPassword} className="space-y-4 pt-1">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={newUserPassword}
+                  onChange={(e) => setNewUserPassword(e.target.value)}
+                  placeholder="Enter your new password"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApprovedPassReqToSet(null);
+                    setNewUserPassword('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingNewPass || newUserPassword.length < 4}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-95 disabled:opacity-60 cursor-pointer"
+                >
+                  {isSubmittingNewPass ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  <span>Save New Password</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create Extra Account on Master Phone */}
+      {showCreateExtraAccountModal && (
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <UserPlus size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Create Extra Account
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Exclusive master device privilege (create unlimited accounts)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateExtraAccountModal(false);
+                  setExtraAccountName('');
+                  setExtraAccountPassword('');
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateExtraAccountSubmit} className="space-y-3.5 pt-1">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Full Name / Username
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={extraAccountName}
+                  onChange={(e) => setExtraAccountName(e.target.value)}
+                  placeholder="e.g., Alex Johnson"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Account Password (min 6 characters)
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={extraAccountPassword}
+                  onChange={(e) => setExtraAccountPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateExtraAccountModal(false);
+                    setExtraAccountName('');
+                    setExtraAccountPassword('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingExtraAccount || !extraAccountName.trim() || extraAccountPassword.length < 6}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95 disabled:opacity-60 cursor-pointer"
+                >
+                  {isCreatingExtraAccount ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Plus size={14} />
+                  )}
+                  <span>Create & Switch</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add Existing Account to Master Phone */}
+      {showAddExistingAccountModal && (
+        <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <Smartphone size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Link Existing Account
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Add another existing account to this phone switcher
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddExistingAccountModal(false);
+                  setExistingIdentifier('');
+                  setExistingPassword('');
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddExistingAccountSubmit} className="space-y-3.5 pt-1">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Username or Chat Code (e.g. #ABC12)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={existingIdentifier}
+                  onChange={(e) => setExistingIdentifier(e.target.value)}
+                  placeholder="Enter name or chat code"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={existingPassword}
+                  onChange={(e) => setExistingPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddExistingAccountModal(false);
+                    setExistingIdentifier('');
+                    setExistingPassword('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingExisting || !existingIdentifier.trim() || !existingPassword}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95 disabled:opacity-60 cursor-pointer"
+                >
+                  {isAddingExisting ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  <span>Sign In & Link</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Secret Admin Authentication Modal (3 Clicks Trigger) */}
@@ -437,19 +938,283 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       )}
 
-      {/* Header - Triple Click Secret Trigger on Title */}
-      <div>
-        <h2
-          onClick={handleHeaderTripleClick}
-          className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white cursor-pointer select-none transition-colors"
-          title="Account Profile & Settings"
-        >
-          Account Profile & Settings
-        </h2>
-        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-          Customize your profile photo, personal information, and Light/Dark display theme.
-        </p>
+      {/* Active User Request Notifications (Approved & Pending) */}
+      {/* 1. Approved Password Change Request */}
+      {userPasswordRequests
+        .filter((r) => r.status === 'approved')
+        .map((r) => (
+          <div
+            key={r.id}
+            className="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border-2 border-emerald-500/60 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in slide-in-from-top-2 duration-200"
+          >
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                <KeyRound size={22} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-bold text-emerald-900 dark:text-emerald-100">
+                    Password Change Request Approved!
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-600 text-white uppercase tracking-wider">
+                    APPROVED
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-0.5">
+                  The administrator has approved your password request. Click below to choose your new password.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setApprovedPassReqToSet(r);
+                  setNewUserPassword('');
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer transition-all active:scale-95"
+              >
+                <Check size={15} />
+                <span>Click to Change Password</span>
+              </button>
+            </div>
+          </div>
+        ))}
+
+      {/* 2. Completed Password Change Request */}
+      {userPasswordRequests
+        .filter((r) => r.status === 'completed')
+        .map((r) => (
+          <div
+            key={r.id}
+            className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-850/80 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                <Check size={18} />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Password Reset Completed
+                </h4>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Your password change has been saved and applied.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => dismissUserPasswordRequest(r.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        ))}
+
+      {/* 3. Approved Name Change Request */}
+      {userNameRequests
+        .filter((r) => r.status === 'approved')
+        .map((r) => (
+          <div
+            key={r.id}
+            className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/80 shadow-xs flex items-center justify-between gap-3 animate-in slide-in-from-top-2 duration-200"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                <Sparkles size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-bold text-indigo-900 dark:text-indigo-100">
+                    Name Change Approved!
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-indigo-600 text-white uppercase tracking-wider">
+                    APPROVED
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-700 dark:text-indigo-300 mt-0.5">
+                  Your display name was successfully changed to <strong>"{r.requestedName}"</strong>.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => dismissUserNameChangeRequest(r.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        ))}
+
+      {/* 4. Pending Requests Notification Pill */}
+      {(userPasswordRequests.some((r) => r.status === 'pending') ||
+        userNameRequests.some((r) => r.status === 'pending')) && (
+        <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200 font-medium">
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+            <span>
+              You have {userPasswordRequests.filter((r) => r.status === 'pending').length +
+                userNameRequests.filter((r) => r.status === 'pending').length} request(s) under review by Administrator.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Header - Triple Click Secret Trigger on Title or Authoritative Badge */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2
+            onClick={handleHeaderTripleClick}
+            className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white cursor-pointer select-none transition-colors"
+            title="Click 3 times to access admin control"
+          >
+            Account Profile & Settings
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
+            Customize your profile photo, personal information, and Light/Dark display theme.
+          </p>
+        </div>
+
+        {/* AUTHORITATIVE System Badge (Red when locked for others, Green when open. 3 Clicks by Kailash toggles lock) */}
+        {isAdminLocked ? (
+          <button
+            type="button"
+            onClick={handleAuthoritativeBadgeTripleClick}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800 cursor-pointer select-none self-start hover:border-rose-500 hover:scale-105 transition-all active:scale-95 shadow-xs"
+            title={isMasterUser ? "Admin Access: BLOCKED for others (Kailash: Click 3x to UNLOCK)" : "AUTHORITATIVE [BLOCKED]"}
+          >
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shadow-sm shadow-rose-500" />
+            <span>AUTHORITATIVE [LOCKED]</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleAuthoritativeBadgeTripleClick}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 cursor-pointer select-none self-start hover:border-emerald-500 hover:scale-105 transition-all active:scale-95 shadow-xs"
+            title={isMasterUser ? "Admin Access: OPEN for PIN 2026 (Kailash: Click 3x to BLOCK)" : "AUTHORITATIVE [OPEN]"}
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-sm shadow-emerald-400" />
+            <span>AUTHORITATIVE [OPEN]</span>
+          </button>
+        )}
       </div>
+
+      {/* Master Phone Multi-Account Management (Exclusive to Kailash's Phone) */}
+      {isMasterUser && (
+        <div className={`p-6 rounded-2xl border ${theme.surfaceCard} space-y-4 shadow-sm relative overflow-hidden`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800/80 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-200 dark:border-indigo-800">
+                <Users size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Master Device: Multi-Account Switcher
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 uppercase tracking-wider">
+                    Unlimited
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Switch instantly between all your accounts or create new ones without device restrictions.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setShowAddExistingAccountModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+              >
+                <Smartphone size={14} />
+                <span>Link Existing</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCreateExtraAccountModal(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-all active:scale-95 cursor-pointer"
+              >
+                <UserPlus size={14} />
+                <span>Create Extra Account</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Saved Accounts List */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-1">
+            {savedAccounts.map((acc) => {
+              const isActive = acc.uid === user.uid;
+              return (
+                <div
+                  key={acc.uid}
+                  className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
+                    isActive
+                      ? 'bg-indigo-50/60 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 shadow-xs'
+                      : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <UserAvatar
+                      name={acc.name}
+                      photoURL={acc.photoURL}
+                      avatarColor={acc.avatarColor}
+                      avatarIcon={acc.avatarIcon}
+                      size="md"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-slate-900 dark:text-white truncate">
+                          {acc.name}
+                        </span>
+                        {acc.isVerified && <VerifiedBadge size="xs" />}
+                      </div>
+                      <span className="font-mono text-[10px] text-slate-400 block truncate">
+                        {formatChatCodeDisplay(acc.chatCode || '')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {isActive ? (
+                      <span className="px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                        <ShieldCheck size={12} />
+                        Active
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSwitchAccount(acc.uid)}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1 shadow-xs active:scale-95 cursor-pointer"
+                          title="Switch to this account"
+                        >
+                          <ArrowRightLeft size={12} />
+                          <span>Switch</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSavedAccount(acc.uid, acc.name)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                          title="Remove from device switcher"
+                        >
+                          <X size={14} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Hidden file input */}
       <input

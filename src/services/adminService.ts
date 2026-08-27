@@ -7,6 +7,7 @@ import {
   updateDoc,
   deleteDoc,
   query,
+  where,
   orderBy,
   onSnapshot,
   serverTimestamp,
@@ -434,7 +435,105 @@ export function subscribeToPasswordRequests(
   });
 }
 
-// Admin resolves Password Request by setting new password
+// Admin approves Password Request so user can enter their own password
+export async function approvePasswordRequest(requestId: string): Promise<void> {
+  await updateDoc(doc(db, 'passwordRequests', requestId), {
+    status: 'approved'
+  });
+}
+
+// Admin rejects Password Request
+export async function rejectPasswordRequest(requestId: string): Promise<void> {
+  await updateDoc(doc(db, 'passwordRequests', requestId), {
+    status: 'rejected'
+  });
+}
+
+// User completes their approved password reset with a new password
+export async function userSetNewPasswordWithApproval(
+  userId: string,
+  requestId: string,
+  newPlainPassword: string
+): Promise<void> {
+  if (newPlainPassword.length < 4) {
+    throw new Error('Password must be at least 4 characters.');
+  }
+  const passwordHash = await hashPassword(newPlainPassword);
+  const userDocRef = doc(db, 'users', userId);
+  await updateDoc(userDocRef, {
+    passwordHash,
+    updatedAt: Date.now()
+  });
+
+  await updateDoc(doc(db, 'passwordRequests', requestId), {
+    status: 'completed'
+  });
+}
+
+// User dismisses their resolved/approved/rejected request notification
+export async function dismissUserPasswordRequest(requestId: string): Promise<void> {
+  await deleteDoc(doc(db, 'passwordRequests', requestId));
+}
+
+// Listen to current user's Password Reset Requests
+export function subscribeToUserPasswordRequests(
+  userId: string,
+  onUpdate: (requests: PasswordResetRequest[]) => void
+) {
+  const reqRef = collection(db, 'passwordRequests');
+  const q = query(reqRef, where('userId', '==', userId));
+
+  return onSnapshot(q, (snapshot) => {
+    const list: PasswordResetRequest[] = snapshot.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        userId: data.userId,
+        userName: data.userName,
+        userChatCode: data.userChatCode,
+        reason: data.reason || '',
+        status: data.status || 'pending',
+        createdAt: data.createdAt || Date.now()
+      };
+    });
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    onUpdate(list);
+  });
+}
+
+// Listen to current user's Name Change Requests
+export function subscribeToUserNameChangeRequests(
+  userId: string,
+  onUpdate: (requests: NameChangeRequest[]) => void
+) {
+  const reqRef = collection(db, 'nameChangeRequests');
+  const q = query(reqRef, where('userId', '==', userId));
+
+  return onSnapshot(q, (snapshot) => {
+    const list: NameChangeRequest[] = snapshot.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        userId: data.userId,
+        currentName: data.currentName || 'Unknown',
+        requestedName: data.requestedName || 'Unknown',
+        userChatCode: data.userChatCode || '------',
+        reason: data.reason || '',
+        status: data.status || 'pending',
+        createdAt: data.createdAt || Date.now()
+      };
+    });
+    list.sort((a, b) => b.createdAt - a.createdAt);
+    onUpdate(list);
+  });
+}
+
+// User dismisses their resolved/approved/rejected name request notification
+export async function dismissUserNameChangeRequest(requestId: string): Promise<void> {
+  await deleteDoc(doc(db, 'nameChangeRequests', requestId));
+}
+
+// Admin resolves Password Request by setting new password directly
 export async function resolvePasswordRequest(
   requestId: string,
   userId: string,
@@ -557,4 +656,63 @@ export function subscribeToEmergencyMode(onUpdate: (enabled: boolean) => void) {
       onUpdate(false);
     }
   });
+}
+
+// Global Admin Access Lockout (Controls whether admin access with PIN 2026 is blocked for non-Kailash users)
+export function subscribeToAdminLockState(onUpdate: (isLocked: boolean) => void) {
+  const lockRef = doc(db, 'systemConfig', 'adminLock');
+  return onSnapshot(
+    lockRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        onUpdate(Boolean(data?.isLocked));
+      } else {
+        onUpdate(false);
+      }
+    },
+    (err) => {
+      console.warn('Error listening to admin lock state:', err);
+      onUpdate(false);
+    }
+  );
+}
+
+// Get immediate Admin Lock state
+export async function getAdminLockState(): Promise<boolean> {
+  try {
+    const lockRef = doc(db, 'systemConfig', 'adminLock');
+    const snap = await getDoc(lockRef);
+    if (snap.exists()) {
+      return Boolean(snap.data()?.isLocked);
+    }
+    return false;
+  } catch (err) {
+    console.error('Failed to get admin lock state:', err);
+    return false;
+  }
+}
+
+// Toggle Admin Access Lockout (Exclusive to Kailash via 3 clicks on Authoritative badge)
+export async function toggleAdminLockState(userName: string): Promise<boolean> {
+  const normalized = (userName || '').trim().toLowerCase();
+  if (normalized !== 'kailash') {
+    throw new Error('Only Master Admin "Kailash" can toggle Admin Access Lockout.');
+  }
+
+  const currentLocked = await getAdminLockState();
+  const nextLocked = !currentLocked;
+
+  const lockRef = doc(db, 'systemConfig', 'adminLock');
+  await setDoc(
+    lockRef,
+    {
+      isLocked: nextLocked,
+      updatedBy: userName,
+      updatedAt: Date.now()
+    },
+    { merge: true }
+  );
+
+  return nextLocked;
 }

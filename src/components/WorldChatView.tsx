@@ -283,7 +283,7 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
   const isMasterAdmin = (currentUser.name || '').trim().toLowerCase() === 'kailash';
 
   return (
-    <div className="h-full max-w-5xl mx-auto p-2 sm:p-4 lg:p-6 flex flex-col h-[calc(100vh-4rem)] md:h-screen">
+    <div className="h-[calc(100dvh-8.5rem)] md:h-[calc(100vh-2rem)] max-w-5xl mx-auto p-2 sm:p-4 lg:p-6 flex flex-col">
       {/* Photo Crop Modal */}
       {showCropperModal && rawPhotoForCrop && (
         <ImageCropperModal
@@ -681,7 +681,7 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
               </div>
             </div>
           ) : (
-            <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+            <form onSubmit={handleSendMessage} className="flex items-center gap-1.5 sm:gap-2">
               {/* Photo Input (Hidden) */}
               <input
                 type="file"
@@ -696,20 +696,20 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={currentUser.photosDisabled}
-                className="p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-40"
+                className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-40 shrink-0"
                 title="Send photo"
               >
-                <ImageIcon size={19} />
+                <ImageIcon size={18} />
               </button>
 
               {/* Emoji Picker Toggle */}
               <button
                 type="button"
                 onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                className="p-2.5 rounded-xl text-slate-500 hover:text-amber-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-amber-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
                 title="Quick emojis"
               >
-                <Smile size={19} />
+                <Smile size={18} />
               </button>
 
               {/* Text Input */}
@@ -723,30 +723,34 @@ export const WorldChatView: React.FC<WorldChatViewProps> = ({ currentUser }) => 
                     : 'Message the world (expires in 1h)...'
                 }
                 disabled={currentUser.messagingDisabled || isSending}
-                className={`flex-1 px-4 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm focus:outline-hidden`}
+                className={`flex-1 min-w-0 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-xs sm:text-sm focus:outline-hidden`}
               />
 
-              {/* Voice Record Button (when input is empty) */}
-              {!inputText.trim() ? (
-                <button
-                  type="button"
-                  onClick={handleStartVoice}
-                  disabled={currentUser.voiceDisabled}
-                  className="p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-40"
-                  title="Record voice message"
-                >
-                  <Mic size={19} />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={isSending || currentUser.messagingDisabled}
-                  className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-                  title="Send message"
-                >
-                  <Send size={18} />
-                </button>
-              )}
+              {/* Voice Record Button */}
+              <button
+                type="button"
+                onClick={handleStartVoice}
+                disabled={currentUser.voiceDisabled}
+                className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-40 shrink-0"
+                title="Record voice message"
+              >
+                <Mic size={18} />
+              </button>
+
+              {/* Send Button (Always Visible) */}
+              <button
+                type="submit"
+                disabled={isSending || !inputText.trim() || currentUser.messagingDisabled}
+                className={`p-2 sm:px-3.5 sm:py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer ${
+                  inputText.trim() && !currentUser.messagingDisabled && !isSending
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60'
+                }`}
+                title="Send message"
+              >
+                <Send size={16} />
+                <span className="hidden sm:inline">Send</span>
+              </button>
             </form>
           )}
         </div>
