@@ -29,7 +29,7 @@ import {
   normalizeChatCode
 } from '../services/chatService';
 import { playConnectSuccessSound } from '../utils/audio';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar } from './UserAvatar';
 
 interface DashboardViewProps {
   user: UserProfile;
@@ -362,11 +362,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800/80">
                 {recentChats.map((chat) => {
+                  const isGroup = Boolean(chat.isGroup);
+                  const groupTitle = chat.groupName || 'Group Chat';
                   const friendUid = chat.participantIds.find((id) => id !== user.uid) || user.uid;
                   const friend = chat.participants[friendUid] || {
                     name: 'Friend',
                     chatCode: '??????'
                   };
+                  const displayName = isGroup ? groupTitle : friend.name;
                   const unread = chat.unreadCounts?.[user.uid] || 0;
 
                   return (
@@ -375,19 +378,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       onClick={() => onOpenChat(chat.id)}
                       className="group flex items-center gap-3.5 py-3.5 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-all"
                     >
-                      <UserAvatar
-                        name={friend.name}
-                        photoURL={friend.photoURL}
-                        avatarColor={friend.avatarColor}
-                        avatarIcon={friend.avatarIcon}
-                        size="md"
-                        showOnlineStatus
-                      />
+                      {isGroup ? (
+                        <GroupAvatar size="md" />
+                      ) : (
+                        <UserAvatar
+                          name={friend.name}
+                          photoURL={friend.photoURL}
+                          avatarColor={friend.avatarColor}
+                          avatarIcon={friend.avatarIcon}
+                          size="md"
+                          showOnlineStatus
+                        />
+                      )}
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2 mb-0.5">
                           <h4 className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                            {friend.name}
+                            {displayName}
                           </h4>
                           <span className="text-[11px] text-slate-400 shrink-0 font-medium">
                             {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}

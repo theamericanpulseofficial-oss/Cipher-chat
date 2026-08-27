@@ -37,7 +37,7 @@ import {
   formatChatCodeDisplay
 } from '../services/chatService';
 import { playMessageSentSound, playMessageReceivedSound } from '../utils/audio';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar } from './UserAvatar';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { ImageCropperModal } from './ImageCropperModal';
@@ -74,6 +74,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const longPressTimerRef = useRef<number | null>(null);
   const isLongPressActiveRef = useRef(false);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Photo sending & Lightbox state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -106,6 +107,8 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
 
   // Find active chat metadata
   const activeChat = chats.find((c) => c.id === chatId);
+  const isGroup = Boolean(activeChat?.isGroup);
+  const groupName = activeChat?.groupName || 'Group';
   const friendUid = activeChat?.participantIds.find((id) => id !== currentUser.uid) || '';
   const friend = activeChat?.participants[friendUid] || {
     name: 'Connected Friend',
@@ -302,10 +305,17 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
   };
 
   // --- WHATSAPP-STYLE HOLD & SELECT LOGIC ---
-  const handleMessageTouchStart = (msg: ChatMessage) => {
+  const handleMessageTouchStart = (msg: ChatMessage, e?: React.TouchEvent | React.MouseEvent) => {
     isLongPressActiveRef.current = false;
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
 
+    if (e && 'touches' in e && e.touches.length > 0) {
+      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else {
+      touchStartPosRef.current = null;
+    }
+
+    // Increased hold timer to 850ms so fast taps/scrolls never trigger accidental deletion/selection
     longPressTimerRef.current = window.setTimeout(() => {
       isLongPressActiveRef.current = true;
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -320,7 +330,20 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
         next.add(msg.id);
         return next;
       });
-    }, 400);
+    }, 850);
+  };
+
+  const handleMessageTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartPosRef.current || !longPressTimerRef.current) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+
+    // If moved more than 8 pixels, user is scrolling: cancel long press immediately
+    if (dx > 8 || dy > 8) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
   const handleMessageTouchEnd = () => {
@@ -328,6 +351,7 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
+    touchStartPosRef.current = null;
   };
 
   const handleMessageClick = (msg: ChatMessage) => {
@@ -775,27 +799,33 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
               </button>
             )}
 
-            <UserAvatar
-              name={friend.name}
-              photoURL={friend.photoURL}
-              avatarColor={friend.avatarColor}
-              avatarIcon={friend.avatarIcon}
-              size="md"
-              showOnlineStatus
-            />
+            {isGroup ? (
+              <GroupAvatar size="md" />
+            ) : (
+              <UserAvatar
+                name={friend.name}
+                photoURL={friend.photoURL}
+                avatarColor={friend.avatarColor}
+                avatarIcon={friend.avatarIcon}
+                size="md"
+                showOnlineStatus
+              />
+            )}
 
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">
-                  {friend.name}
+                  {isGroup ? groupName : friend.name}
                 </h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  {formatChatCodeDisplay(friend.chatCode)}
-                </span>
+                {!isGroup && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    {formatChatCodeDisplay(friend.chatCode)}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
                 <ShieldCheck size={12} className="text-emerald-500" />
-                <span>Real-Time Encrypted</span>
+                <span>{isGroup ? `${activeChat?.participantIds?.length || 0} participants` : 'Real-Time Encrypted'}</span>
               </div>
             </div>
           </div>
@@ -889,13 +919,17 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
             const isDeleted = msg.isDeleted;
             const isSelected = selectedMessageIds.has(msg.id);
 
+            const senderUser = isGroup ? activeChat?.participants[msg.senderId] : friend;
+            const senderDisplayName = msg.senderName || senderUser?.name || 'User';
+
             return (
               <div
                 key={msg.id}
-                onTouchStart={() => handleMessageTouchStart(msg)}
+                onTouchStart={(e) => handleMessageTouchStart(msg, e)}
+                onTouchMove={handleMessageTouchMove}
                 onTouchEnd={handleMessageTouchEnd}
                 onTouchCancel={handleMessageTouchEnd}
-                onMouseDown={() => handleMessageTouchStart(msg)}
+                onMouseDown={(e) => handleMessageTouchStart(msg, e)}
                 onMouseUp={handleMessageTouchEnd}
                 onMouseLeave={handleMessageTouchEnd}
                 onClick={() => handleMessageClick(msg)}
@@ -914,10 +948,10 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                   {!isMe && (
                     <div className="hidden sm:block shrink-0 mb-1">
                       <UserAvatar
-                        name={friend.name}
-                        photoURL={friend.photoURL}
-                        avatarColor={friend.avatarColor}
-                        avatarIcon={friend.avatarIcon}
+                        name={senderDisplayName}
+                        photoURL={msg.senderPhotoURL || senderUser?.photoURL}
+                        avatarColor={senderUser?.avatarColor}
+                        avatarIcon={senderUser?.avatarIcon}
                         size="sm"
                       />
                     </div>
@@ -933,6 +967,13 @@ export const ChatRoomView: React.FC<ChatRoomViewProps> = ({
                         : `${theme.chatBubbleReceiver} rounded-bl-xs px-3 py-2.5`
                     }`}
                   >
+                    {/* Sender name for group chats */}
+                    {isGroup && !isMe && !isDeleted && (
+                      <span className="block text-[11px] font-bold text-indigo-600 dark:text-indigo-400 mb-1">
+                        {senderDisplayName}
+                      </span>
+                    )}
+
                     {/* If Deleted */}
                     {isDeleted ? (
                       <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1.5">

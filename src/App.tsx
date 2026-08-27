@@ -12,6 +12,7 @@ import { DashboardView } from './components/DashboardView';
 import { ChatsView } from './components/ChatsView';
 import { ChatRoomView } from './components/ChatRoomView';
 import { ProfileView } from './components/ProfileView';
+import { WorldChatView } from './components/WorldChatView';
 import { NewChatModal } from './components/NewChatModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { UserProfile, ChatConversation, NavTab } from './types';
@@ -187,6 +188,10 @@ function MainApp() {
                 onOpenChat={(chatId) => setActiveChatId(chatId)}
                 onOpenNewChatModal={() => setIsNewChatModalOpen(true)}
               />
+            )}
+
+            {currentTab === 'world' && (
+              <WorldChatView currentUser={currentUser} />
             )}
 
             {currentTab === 'profile' && (

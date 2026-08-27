@@ -2,6 +2,7 @@ import React from 'react';
 import {
   LayoutDashboard,
   MessageSquare,
+  Globe,
   User as UserIcon,
   LogOut,
   ShieldCheck,
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navItems = [
     { id: 'dashboard' as NavTab, label: 'Dashboard', icon: LayoutDashboard },
     { id: 'chats' as NavTab, label: 'Chats', icon: MessageSquare, badge: unreadTotal },
+    { id: 'world' as NavTab, label: 'World Chat', icon: Globe },
     { id: 'profile' as NavTab, label: 'Profile', icon: UserIcon },
   ];
 

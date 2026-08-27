@@ -25,6 +25,16 @@ service cloud.firestore {
     match /passwordRequests/{requestId} {
       allow read, write: if true;
     }
+
+    // Name Change Requests collection: Users request name changes, Admin approves
+    match /nameChangeRequests/{requestId} {
+      allow read, write: if true;
+    }
+
+    // World Chat collection: Global messages auto-cleaned after 1 hour
+    match /world_messages/{messageId} {
+      allow read, write: if true;
+    }
   }
 }
 

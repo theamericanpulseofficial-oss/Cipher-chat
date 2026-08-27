@@ -10,6 +10,9 @@ export interface UserProfile {
   lastSeen?: number;
   bio?: string;
   isOnline?: boolean;
+  isVerified?: boolean; // WhatsApp style blue tick (Admin granted only)
+  isNameChangeLocked?: boolean; // Admin can lock name editing for this user
+  deviceId?: string; // Bound device identifier
   isBanned?: boolean;
   bannedReason?: string;
   messagingDisabled?: boolean;
@@ -88,7 +91,18 @@ export interface PasswordResetRequest {
   createdAt: number;
 }
 
-export type NavTab = 'dashboard' | 'chats' | 'profile' | 'admin';
+export interface NameChangeRequest {
+  id: string;
+  userId: string;
+  currentName: string;
+  requestedName: string;
+  userChatCode: string;
+  reason?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+}
+
+export type NavTab = 'dashboard' | 'chats' | 'world' | 'profile' | 'admin';
 
 export type ThemeMode = 'light' | 'dark';
 

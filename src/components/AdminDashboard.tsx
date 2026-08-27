@@ -24,9 +24,11 @@ import {
   Volume2,
   VolumeX,
   FileText,
-  UserPlus
+  UserPlus,
+  Edit2,
+  Check
 } from 'lucide-react';
-import { UserProfile, ChatConversation, ChatMessage, GroupRequest, PasswordResetRequest } from '../types';
+import { UserProfile, ChatConversation, ChatMessage, GroupRequest, PasswordResetRequest, NameChangeRequest } from '../types';
 import { useToast } from './Toast';
 import {
   getAllUsers,
@@ -41,10 +43,20 @@ import {
   approveGroupRequest,
   rejectGroupRequest,
   subscribeToPasswordRequests,
-  resolvePasswordRequest
+  resolvePasswordRequest,
+  setUserVerifiedStatus,
+  setNameChangeLock,
+  adminUpdateUserName,
+  deleteUserAccount,
+  deletePasswordRequest,
+  deleteGroupRequest,
+  subscribeToNameChangeRequests,
+  approveNameChangeRequest,
+  rejectNameChangeRequest,
+  deleteNameChangeRequest
 } from '../services/adminService';
 import { subscribeToChatMessages, formatChatCodeDisplay } from '../services/chatService';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, VerifiedBadge } from './UserAvatar';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
 import { ImageLightboxModal } from './ImageLightboxModal';
 
@@ -53,7 +65,7 @@ interface AdminDashboardProps {
   onExit: () => void;
 }
 
-type AdminTab = 'chats' | 'users' | 'groups' | 'passwords';
+type AdminTab = 'chats' | 'users' | 'groups' | 'passwords' | 'names';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onExit }) => {
   const { showToast } = useToast();
@@ -63,6 +75,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [groupRequests, setGroupRequests] = useState<GroupRequest[]>([]);
   const [passwordRequests, setPasswordRequests] = useState<PasswordResetRequest[]>([]);
+  const [nameRequests, setNameRequests] = useState<NameChangeRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Search filters
@@ -78,6 +91,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
   const [passwordModalUser, setPasswordModalUser] = useState<UserProfile | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [isSavingPassword, setIsSavingPassword] = useState(false);
+
+  // Rename user modal state
+  const [renameModalUser, setRenameModalUser] = useState<UserProfile | null>(null);
+  const [renameInput, setRenameInput] = useState('');
+  const [isSavingRename, setIsSavingRename] = useState(false);
 
   // Group creation modal
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
@@ -128,9 +146,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
       setPasswordRequests(reqs);
     });
 
+    // Subscribe to live name change requests
+    const unsubName = subscribeToNameChangeRequests((reqs) => {
+      setNameRequests(reqs);
+    });
+
     return () => {
       unsubGroup();
       unsubPwd();
+      unsubName();
     };
   }, []);
 
@@ -238,6 +262,106 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
     }
   };
 
+  // Toggle Verified WhatsApp Blue Tick
+  const handleToggleVerified = async (user: UserProfile) => {
+    const newStatus = !user.isVerified;
+    try {
+      await setUserVerifiedStatus(user.uid, newStatus);
+      setUsers((prev) =>
+        prev.map((u) => (u.uid === user.uid ? { ...u, isVerified: newStatus } : u))
+      );
+      showToast(
+        newStatus
+          ? `Verified Blue Tick granted to ${user.name}!`
+          : `Verified status removed from ${user.name}.`,
+        'success'
+      );
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to update verified status', 'error');
+    }
+  };
+
+  // Toggle Name Change Lock
+  const handleToggleNameLock = async (user: UserProfile) => {
+    const newStatus = !user.isNameChangeLocked;
+    try {
+      await setNameChangeLock(user.uid, newStatus);
+      setUsers((prev) =>
+        prev.map((u) => (u.uid === user.uid ? { ...u, isNameChangeLocked: newStatus } : u))
+      );
+      showToast(
+        newStatus
+          ? `Name change locked for ${user.name}.`
+          : `Name change unlocked for ${user.name}.`,
+        'info'
+      );
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to toggle name lock', 'error');
+    }
+  };
+
+  // Admin Save User Rename
+  const handleSaveUserRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!renameModalUser || !renameInput.trim()) return;
+    setIsSavingRename(true);
+    try {
+      await adminUpdateUserName(renameModalUser.uid, renameInput.trim());
+      setUsers((prev) =>
+        prev.map((u) => (u.uid === renameModalUser.uid ? { ...u, name: renameInput.trim() } : u))
+      );
+      showToast(`User renamed to "${renameInput.trim()}"!`, 'success');
+      setRenameModalUser(null);
+      setRenameInput('');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to rename user', 'error');
+    } finally {
+      setIsSavingRename(false);
+    }
+  };
+
+  // Admin Permanently Delete User Account
+  const handleDeleteUserAccount = async (user: UserProfile) => {
+    if (!confirm(`Are you sure you want to PERMANENTLY delete user account "${user.name}" (${user.chatCode})? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteUserAccount(user.uid);
+      setUsers((prev) => prev.filter((u) => u.uid !== user.uid));
+      showToast(`User account for ${user.name} was permanently deleted.`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete user account', 'error');
+    }
+  };
+
+  // Delete Password Request
+  const handleDeletePasswordReq = async (reqId: string) => {
+    try {
+      await deletePasswordRequest(reqId);
+      setPasswordRequests((prev) => prev.filter((r) => r.id !== reqId));
+      showToast('Password request deleted from database.', 'info');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete request', 'error');
+    }
+  };
+
+  // Delete Group Request
+  const handleDeleteGroupReq = async (reqId: string) => {
+    try {
+      await deleteGroupRequest(reqId);
+      setGroupRequests((prev) => prev.filter((r) => r.id !== reqId));
+      showToast('Group request deleted from database.', 'info');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete group request', 'error');
+    }
+  };
+
   // Change Password
   const handleSaveUserPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -330,6 +454,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
     }
   };
 
+  // Approve Name Change Request
+  const handleApproveNameReq = async (req: NameChangeRequest) => {
+    try {
+      await approveNameChangeRequest(req.id, req.userId, req.requestedName);
+      setUsers((prev) =>
+        prev.map((u) => (u.uid === req.userId ? { ...u, name: req.requestedName } : u))
+      );
+      showToast(`Name for ${req.currentName} updated to "${req.requestedName}"!`, 'success');
+      loadPlatformData();
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to approve name change', 'error');
+    }
+  };
+
+  // Reject Name Change Request
+  const handleRejectNameReq = async (reqId: string) => {
+    try {
+      await rejectNameChangeRequest(reqId);
+      showToast('Name change request rejected', 'info');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to reject request', 'error');
+    }
+  };
+
+  // Delete Name Change Request
+  const handleDeleteNameReq = async (reqId: string) => {
+    try {
+      await deleteNameChangeRequest(reqId);
+      showToast('Name change request record deleted', 'info');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete request', 'error');
+    }
+  };
+
   // Add Member to Group
   const handleAddMemberToTargetGroup = async () => {
     if (!targetGroupForMember || !userToAddUid) return;
@@ -377,6 +538,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
 
   const pendingGroupReqsCount = groupRequests.filter((r) => r.status === 'pending').length;
   const pendingPasswordReqsCount = passwordRequests.filter((r) => r.status === 'pending').length;
+  const pendingNameReqsCount = nameRequests.filter((r) => r.status === 'pending').length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-600 selection:text-white">
@@ -441,6 +603,64 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                   className="px-5 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-lg transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   {isSavingPassword ? 'Updating...' : 'Set Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Rename User Modal */}
+      {renameModalUser && (
+        <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                <Edit2 size={22} />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-white">
+                  Change Name for {renameModalUser.name}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Chat Code: {formatChatCodeDisplay(renameModalUser.chatCode)}
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveUserRename} className="space-y-4 pt-2">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                  New Display Name
+                </label>
+                <input
+                  type="text"
+                  value={renameInput}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  placeholder="Enter new username"
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:outline-hidden focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRenameModalUser(null);
+                    setRenameInput('');
+                  }}
+                  className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-white rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isSavingRename}
+                  className="px-5 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-lg transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                >
+                  {isSavingRename ? 'Saving...' : 'Update Name'}
                 </button>
               </div>
             </form>
@@ -632,7 +852,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
               <h1 className="text-lg sm:text-xl font-black tracking-tight text-white">
                 Admin Master Control
               </h1>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-950 text-rose-300 border border-rose-800">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 AUTHORITATIVE
               </span>
             </div>
@@ -692,6 +913,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
               <span className="text-rose-400 font-bold">Password Requests:</span>
               <span className="font-bold text-white bg-rose-600 px-2 py-0.5 rounded-md font-mono animate-pulse">
                 {pendingPasswordReqsCount} Pending
+              </span>
+            </div>
+          )}
+
+          {pendingNameReqsCount > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-purple-400 font-bold">Name Requests:</span>
+              <span className="font-bold text-white bg-purple-600 px-2 py-0.5 rounded-md font-mono animate-pulse">
+                {pendingNameReqsCount} Pending
               </span>
             </div>
           )}
@@ -766,6 +996,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
         >
           <KeyRound size={15} />
           <span>Password Requests ({pendingPasswordReqsCount})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('names')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${
+            activeTab === 'names'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-850'
+          }`}
+        >
+          <FileText size={15} />
+          <span>Name Requests ({pendingNameReqsCount})</span>
+          {pendingNameReqsCount > 0 && (
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
+          )}
         </button>
       </div>
 
@@ -1063,26 +1309,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                             </p>
                           )}
 
-                          {req.status === 'pending' && (
-                            <div className="flex items-center justify-end gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => handleRejectGroupReq(req.id)}
-                                className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-950/40 cursor-pointer"
-                              >
-                                Decline
-                              </button>
+                          <div className="flex items-center justify-between pt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGroupReq(req.id)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 transition-colors cursor-pointer"
+                              title="Delete request"
+                            >
+                              <Trash2 size={14} />
+                            </button>
 
-                              <button
-                                type="button"
-                                onClick={() => handleApproveGroupReq(req)}
-                                className="inline-flex items-center gap-1 px-4 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
-                              >
-                                <CheckCircle size={14} />
-                                <span>Approve & Create</span>
-                              </button>
-                            </div>
-                          )}
+                            {req.status === 'pending' && (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectGroupReq(req.id)}
+                                  className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-950/40 cursor-pointer"
+                                >
+                                  Decline
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveGroupReq(req)}
+                                  className="inline-flex items-center gap-1 px-4 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                                >
+                                  <CheckCircle size={14} />
+                                  <span>Approve & Create</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1199,8 +1456,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                       <tr>
                         <th className="py-3 px-4">User</th>
                         <th className="py-3 px-4">Chat Code</th>
+                        <th className="py-3 px-4">Verified & Lock</th>
                         <th className="py-3 px-4">Account Status</th>
-                        <th className="py-3 px-4">Features (Msg / Voice / Photo)</th>
+                        <th className="py-3 px-4">Permissions (Msg / Voice / Photo)</th>
                         <th className="py-3 px-4 text-right">Actions</th>
                       </tr>
                     </thead>
@@ -1227,7 +1485,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                                     size="sm"
                                   />
                                   <div>
-                                    <p className="font-bold text-white">{u.name}</p>
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="font-bold text-white">{u.name}</p>
+                                      {u.isVerified && <VerifiedBadge size={14} />}
+                                    </div>
                                     <p className="text-[10px] text-slate-500 font-mono">{u.uid}</p>
                                   </div>
                                 </div>
@@ -1236,6 +1497,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                               {/* Chat Code */}
                               <td className="py-3.5 px-4 font-mono font-bold text-indigo-400">
                                 {formatChatCodeDisplay(u.chatCode)}
+                              </td>
+
+                              {/* Verified & Name Lock Controls */}
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-2">
+                                  {/* Verified Badge Toggle */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleVerified(u)}
+                                    title={u.isVerified ? 'Remove Verified Blue Tick' : 'Grant Verified Blue Tick'}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
+                                      u.isVerified
+                                        ? 'bg-sky-950/80 text-sky-400 border border-sky-800 hover:bg-sky-900/80'
+                                        : 'bg-slate-800/80 text-slate-400 border border-slate-700 hover:text-white'
+                                    }`}
+                                  >
+                                    <VerifiedBadge size={12} />
+                                    <span>{u.isVerified ? 'Verified' : 'Unverified'}</span>
+                                  </button>
+
+                                  {/* Name Lock Toggle */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleNameLock(u)}
+                                    title={u.isNameChangeLocked ? 'Unlock name changes' : 'Lock name changes (User cannot edit name)'}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
+                                      u.isNameChangeLocked
+                                        ? 'bg-amber-950/80 text-amber-400 border border-amber-800 hover:bg-amber-900/80'
+                                        : 'bg-slate-800/80 text-slate-400 border border-slate-700 hover:text-white'
+                                    }`}
+                                  >
+                                    <Lock size={11} />
+                                    <span>{u.isNameChangeLocked ? 'Name Locked' : 'Unlocked'}</span>
+                                  </button>
+                                </div>
                               </td>
 
                               {/* Account Status */}
@@ -1302,7 +1598,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
 
                               {/* Actions */}
                               <td className="py-3.5 px-4 text-right">
-                                <div className="flex items-center justify-end gap-2">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {/* Rename user button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRenameModalUser(u);
+                                      setRenameInput(u.name);
+                                    }}
+                                    title="Rename user"
+                                    className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+
                                   {/* Set Password */}
                                   <button
                                     type="button"
@@ -1310,22 +1619,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                                       setPasswordModalUser(u);
                                       setNewPasswordInput('');
                                     }}
-                                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
+                                    className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
                                   >
-                                    Set Password
+                                    Password
                                   </button>
 
                                   {/* Ban/Unban Button */}
                                   <button
                                     type="button"
                                     onClick={() => handleToggleBan(u)}
-                                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-colors cursor-pointer ${
                                       isBanned
                                         ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
                                         : 'bg-rose-600 hover:bg-rose-700 text-white'
                                     }`}
                                   >
                                     {isBanned ? 'Unban' : 'Ban'}
+                                  </button>
+
+                                  {/* Delete Account */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteUserAccount(u)}
+                                    title="Permanently Delete User Account"
+                                    className="p-1.5 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-900/60 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 size={13} />
                                   </button>
                                 </div>
                               </td>
@@ -1359,6 +1678,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                         key={req.id}
                         req={req}
                         onResolve={(newPass) => handleResolvePasswordReq(req, newPass)}
+                        onDelete={() => handleDeletePasswordReq(req.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 5: NAME CHANGE REQUESTS */}
+            {activeTab === 'names' && (
+              <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      <FileText className="text-purple-400" size={20} />
+                      <span>Display Name Change Requests</span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Requests submitted by users to update their verified display names.
+                    </p>
+                  </div>
+                </div>
+
+                {nameRequests.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-8 text-center">
+                    No name change requests yet.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {nameRequests.map((req) => (
+                      <NameRequestCard
+                        key={req.id}
+                        req={req}
+                        onApprove={() => handleApproveNameReq(req)}
+                        onReject={() => handleRejectNameReq(req.id)}
+                        onDelete={() => handleDeleteNameReq(req.id)}
                       />
                     ))}
                   </div>
@@ -1372,11 +1727,94 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
   );
 };
 
+// Subcomponent for Name Request Card
+const NameRequestCard: React.FC<{
+  req: NameChangeRequest;
+  onApprove: () => void;
+  onReject: () => void;
+  onDelete: () => void;
+}> = ({ req, onApprove, onReject, onDelete }) => {
+  return (
+    <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 line-through">{req.currentName}</span>
+            <span className="text-xs text-slate-500">➔</span>
+            <span className="text-sm font-bold text-white text-purple-300">{req.requestedName}</span>
+          </div>
+          <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+            Chat Code: {formatChatCodeDisplay(req.userChatCode)} • ID: {req.userId}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span
+            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+              req.status === 'approved'
+                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                : req.status === 'rejected'
+                ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                : 'bg-amber-950 text-amber-300 border border-amber-800'
+            }`}
+          >
+            {req.status.toUpperCase()}
+          </span>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete Request Record"
+            className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 transition-colors cursor-pointer"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      {req.reason && (
+        <p className="text-xs text-slate-300 bg-slate-900/60 p-2.5 rounded-xl">
+          Reason: "{req.reason}"
+        </p>
+      )}
+
+      {req.status === 'pending' ? (
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onReject}
+            className="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-rose-300 bg-rose-950/40 hover:bg-rose-900/50 border border-rose-800/60 transition-colors cursor-pointer"
+          >
+            Decline
+          </button>
+          <button
+            type="button"
+            onClick={onApprove}
+            className="px-4 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+          >
+            <Check size={14} />
+            <span>Approve & Rename</span>
+          </button>
+        </div>
+      ) : req.status === 'approved' ? (
+        <p className="text-[11px] text-emerald-400 font-semibold">
+          ✓ Approved: User display name updated to "{req.requestedName}"
+        </p>
+      ) : (
+        <p className="text-[11px] text-rose-400 font-semibold">
+          ✕ Declined by Admin
+        </p>
+      )}
+    </div>
+  );
+};
+
 // Subcomponent for Password Request Card with inline password setter
 const PasswordRequestCard: React.FC<{
   req: PasswordResetRequest;
   onResolve: (pass: string) => void;
-}> = ({ req, onResolve }) => {
+  onDelete: () => void;
+}> = ({ req, onResolve, onDelete }) => {
   const [passInput, setPassInput] = useState('');
 
   return (
@@ -1389,15 +1827,26 @@ const PasswordRequestCard: React.FC<{
           </p>
         </div>
 
-        <span
-          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-            req.status === 'completed'
-              ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-              : 'bg-amber-950 text-amber-300 border border-amber-800'
-          }`}
-        >
-          {req.status.toUpperCase()}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+              req.status === 'completed'
+                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                : 'bg-amber-950 text-amber-300 border border-amber-800'
+            }`}
+          >
+            {req.status.toUpperCase()}
+          </span>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete Request"
+            className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 transition-colors cursor-pointer"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
       </div>
 
       {req.reason && (

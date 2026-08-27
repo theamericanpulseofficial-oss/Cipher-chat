@@ -21,7 +21,33 @@ import { UserProfile } from '../types';
 import { hashPassword } from '../utils/crypto';
 import { normalizeChatCode } from './chatService';
 
-const SESSION_STORAGE_KEY = 'cipherchat_active_uid';
+const SESSION_STORAGE_KEY = 'up1chatbox_active_uid';
+const DEVICE_ID_KEY = 'up1chatbox_device_id';
+const DEVICE_BOUND_ACCOUNT_KEY = 'up1chatbox_bound_user';
+
+// Get or initialize persistent unique device ID
+export function getOrCreateDeviceId(): string {
+  try {
+    let deviceId = localStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+      deviceId = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 9);
+      localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+  } catch {
+    return 'dev_fallback_' + Date.now();
+  }
+}
+
+// Get device-bound account info if any
+export function getDeviceBoundAccount(): { uid: string; name: string } | null {
+  try {
+    const raw = localStorage.getItem(DEVICE_BOUND_ACCOUNT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 // Generate unique 6-character chat code (e.g., K8X-4P2)
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -91,7 +117,15 @@ export async function signInWithGoogle(): Promise<UserProfile> {
       avatarIcon: data.avatarIcon || 'shield',
       createdAt: data.createdAt || Date.now(),
       lastSeen: Date.now(),
-      bio: data.bio || 'Ready to securely connect on UP1CHATBOX.'
+      bio: data.bio || 'Ready to securely connect on UP1CHATBOX.',
+      isVerified: data.isVerified || false,
+      isNameChangeLocked: data.isNameChangeLocked || false,
+      deviceId: data.deviceId || getOrCreateDeviceId(),
+      isBanned: data.isBanned || false,
+      bannedReason: data.bannedReason || '',
+      messagingDisabled: data.messagingDisabled || false,
+      voiceDisabled: data.voiceDisabled || false,
+      photosDisabled: data.photosDisabled || false
     };
     await updateDoc(userDocRef, {
       lastSeen: Date.now(),
@@ -99,6 +133,7 @@ export async function signInWithGoogle(): Promise<UserProfile> {
     });
     try {
       localStorage.setItem(SESSION_STORAGE_KEY, user.uid);
+      localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
     } catch (e) {
       console.warn('LocalStorage error:', e);
     }
@@ -158,6 +193,12 @@ export async function registerUser(name: string, password: string, photoURL?: st
     throw new Error('Password must be at least 6 characters.');
   }
 
+  // 1 Device per Account restriction
+  const boundAccount = getDeviceBoundAccount();
+  if (boundAccount && boundAccount.name) {
+    throw new Error(`This device has already created account "${boundAccount.name}". Only 1 account per device is permitted.`);
+  }
+
   const normalizedName = trimmedName.toLowerCase();
 
   // Check if username is already registered in Firestore (case-insensitive check)
@@ -179,6 +220,8 @@ export async function registerUser(name: string, password: string, photoURL?: st
   const avatarColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   const avatarIcon = AVATAR_ICONS[Math.floor(Math.random() * AVATAR_ICONS.length)];
 
+  const deviceId = getOrCreateDeviceId();
+
   const profile: UserProfile = {
     uid,
     name: trimmedName,
@@ -189,7 +232,10 @@ export async function registerUser(name: string, password: string, photoURL?: st
     avatarIcon,
     createdAt: Date.now(),
     lastSeen: Date.now(),
-    bio: 'Ready to securely connect on UP1CHATBOX.'
+    bio: 'Ready to securely connect on UP1CHATBOX.',
+    isVerified: false,
+    isNameChangeLocked: false,
+    deviceId
   };
 
   // Ensure no undefined values are passed to Firestore setDoc
@@ -206,11 +252,15 @@ export async function registerUser(name: string, password: string, photoURL?: st
     bio: profile.bio,
     normalizedName,
     passwordHash,
+    isVerified: false,
+    isNameChangeLocked: false,
+    deviceId,
     createdAtTimestamp: serverTimestamp()
   });
 
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, uid);
+    localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
   } catch (e) {
     console.warn('LocalStorage error:', e);
   }
@@ -253,9 +303,18 @@ export async function loginUser(identifier: string, password: string): Promise<U
     throw new Error('Incorrect password. Please try again.');
   }
 
+  // 1 Device per Account restriction check
+  const boundAccount = getDeviceBoundAccount();
+  if (boundAccount && boundAccount.uid && boundAccount.uid !== userDoc.id) {
+    throw new Error(`This device is already locked to account "${boundAccount.name}". 1 account per device policy is active.`);
+  }
+
+  const currentDeviceId = getOrCreateDeviceId();
+
   try {
     await updateDoc(doc(db, 'users', userDoc.id), {
-      lastSeen: Date.now()
+      lastSeen: Date.now(),
+      deviceId: userData.deviceId || currentDeviceId
     });
   } catch (e) {
     console.warn('Could not update last seen:', e);
@@ -271,11 +330,20 @@ export async function loginUser(identifier: string, password: string): Promise<U
     avatarIcon: userData.avatarIcon || 'shield',
     createdAt: userData.createdAt || Date.now(),
     lastSeen: Date.now(),
-    bio: userData.bio || 'Ready to securely connect on UP1CHATBOX.'
+    bio: userData.bio || 'Ready to securely connect on UP1CHATBOX.',
+    isVerified: userData.isVerified || false,
+    isNameChangeLocked: userData.isNameChangeLocked || false,
+    deviceId: userData.deviceId || currentDeviceId,
+    isBanned: userData.isBanned || false,
+    bannedReason: userData.bannedReason || '',
+    messagingDisabled: userData.messagingDisabled || false,
+    voiceDisabled: userData.voiceDisabled || false,
+    photosDisabled: userData.photosDisabled || false
   };
 
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, userDoc.id);
+    localStorage.setItem(DEVICE_BOUND_ACCOUNT_KEY, JSON.stringify({ uid: profile.uid, name: profile.name }));
   } catch (e) {
     console.warn('LocalStorage error:', e);
   }
@@ -299,7 +367,15 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
         avatarIcon: data.avatarIcon || 'shield',
         createdAt: data.createdAt || Date.now(),
         lastSeen: data.lastSeen || Date.now(),
-        bio: data.bio
+        bio: data.bio,
+        isVerified: data.isVerified || false,
+        isNameChangeLocked: data.isNameChangeLocked || false,
+        deviceId: data.deviceId || undefined,
+        isBanned: data.isBanned || false,
+        bannedReason: data.bannedReason || '',
+        messagingDisabled: data.messagingDisabled || false,
+        voiceDisabled: data.voiceDisabled || false,
+        photosDisabled: data.photosDisabled || false
       };
     }
     return null;
@@ -319,6 +395,11 @@ export async function updateUserProfile(
   };
 
   if (updates.name !== undefined) {
+    const userSnap = await getDoc(doc(db, 'users', uid));
+    if (userSnap.exists() && userSnap.data()?.isNameChangeLocked) {
+      throw new Error('Name change is locked by the administrator. Please contact Admin.');
+    }
+
     const trimmedName = updates.name.trim();
     if (trimmedName.length < 2) {
       throw new Error('Name must be at least 2 characters long.');

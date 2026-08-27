@@ -16,7 +16,7 @@ import {
 import { UserProfile, ChatConversation } from '../types';
 import { useTheme } from '../context/ThemeContext';
 import { formatChatCodeDisplay, deleteConversation } from '../services/chatService';
-import { UserAvatar } from './UserAvatar';
+import { UserAvatar, GroupAvatar } from './UserAvatar';
 import { ChatRoomView } from './ChatRoomView';
 import { useToast } from './Toast';
 
@@ -42,13 +42,17 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   const [chatToDelete, setChatToDelete] = useState<ChatConversation | null>(null);
 
   const filteredChats = chats.filter((chat) => {
+    const isGroup = Boolean(chat.isGroup);
+    const groupName = chat.groupName || 'Group';
     const friendUid = chat.participantIds.find((id) => id !== user.uid) || user.uid;
     const friend = chat.participants[friendUid] || { name: '', chatCode: '' };
 
-    const matchesSearch =
-      friend.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      friend.chatCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (chat.lastMessage?.text || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = isGroup
+      ? groupName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (chat.lastMessage?.text || '').toLowerCase().includes(searchQuery.toLowerCase())
+      : friend.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        friend.chatCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (chat.lastMessage?.text || '').toLowerCase().includes(searchQuery.toLowerCase());
 
     const unread = chat.unreadCounts?.[user.uid] || 0;
     if (activeFilter === 'unread') {
@@ -201,11 +205,14 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
               </div>
             ) : (
               filteredChats.map((chat) => {
+                const isGroup = Boolean(chat.isGroup);
+                const groupTitle = chat.groupName || 'Group Chat';
                 const friendUid = chat.participantIds.find((id) => id !== user.uid) || user.uid;
                 const friend = chat.participants[friendUid] || {
                   name: 'Friend',
                   chatCode: '??????'
                 };
+                const displayName = isGroup ? groupTitle : friend.name;
                 const unread = chat.unreadCounts?.[user.uid] || 0;
                 const isSelected = selectedChatId === chat.id;
 
@@ -219,19 +226,23 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                     }`}
                   >
                     <div onClick={() => onOpenChat(chat.id)} className="flex items-center gap-3 flex-1 min-w-0">
-                      <UserAvatar
-                        name={friend.name}
-                        photoURL={friend.photoURL}
-                        avatarColor={friend.avatarColor}
-                        avatarIcon={friend.avatarIcon}
-                        size="md"
-                        showOnlineStatus
-                      />
+                      {isGroup ? (
+                        <GroupAvatar size="md" />
+                      ) : (
+                        <UserAvatar
+                          name={friend.name}
+                          photoURL={friend.photoURL}
+                          avatarColor={friend.avatarColor}
+                          avatarIcon={friend.avatarIcon}
+                          size="md"
+                          showOnlineStatus
+                        />
+                      )}
 
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1 mb-0.5">
                           <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                            {friend.name}
+                            {displayName}
                           </h4>
                           <span className="text-[10px] text-slate-400 font-mono shrink-0">
                             {formatTime(chat.lastMessage?.timestamp || chat.updatedAt)}

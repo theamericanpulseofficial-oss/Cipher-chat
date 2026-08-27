@@ -13,7 +13,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { UserProfile, ChatConversation, ChatMessage, GroupRequest, PasswordResetRequest } from '../types';
+import { UserProfile, ChatConversation, ChatMessage, GroupRequest, PasswordResetRequest, NameChangeRequest } from '../types';
 import { hashPassword } from '../utils/crypto';
 
 // Fetch all registered users in system
@@ -34,6 +34,9 @@ export async function getAllUsers(): Promise<UserProfile[]> {
         createdAt: data.createdAt || Date.now(),
         lastSeen: data.lastSeen || Date.now(),
         bio: data.bio || '',
+        isVerified: data.isVerified || false,
+        isNameChangeLocked: data.isNameChangeLocked || false,
+        deviceId: data.deviceId || undefined,
         isBanned: data.isBanned || false,
         bannedReason: data.bannedReason || '',
         messagingDisabled: data.messagingDisabled || false,
@@ -46,6 +49,41 @@ export async function getAllUsers(): Promise<UserProfile[]> {
     console.error('Failed to fetch all users:', err);
     return [];
   }
+}
+
+// Toggle or Set User Verified Status (WhatsApp Blue Tick Badge)
+export async function setUserVerifiedStatus(uid: string, isVerified: boolean): Promise<void> {
+  const userDocRef = doc(db, 'users', uid);
+  await updateDoc(userDocRef, {
+    isVerified,
+    updatedAt: Date.now()
+  });
+}
+
+// Toggle or Set Name Change Lock for a user
+export async function setNameChangeLock(uid: string, isLocked: boolean): Promise<void> {
+  const userDocRef = doc(db, 'users', uid);
+  await updateDoc(userDocRef, {
+    isNameChangeLocked: isLocked,
+    updatedAt: Date.now()
+  });
+}
+
+// Admin directly changes any user's display name
+export async function adminUpdateUserName(uid: string, newName: string): Promise<void> {
+  const trimmed = newName.trim();
+  if (!trimmed) throw new Error('Name cannot be empty');
+  const userDocRef = doc(db, 'users', uid);
+  await updateDoc(userDocRef, {
+    name: trimmed,
+    updatedAt: Date.now()
+  });
+}
+
+// Admin deletes a user account permanently
+export async function deleteUserAccount(uid: string): Promise<void> {
+  const userDocRef = doc(db, 'users', uid);
+  await deleteDoc(userDocRef);
 }
 
 // Fetch all conversations across the entire platform
@@ -405,5 +443,118 @@ export async function resolvePasswordRequest(
   await adminChangeUserPassword(userId, newPlainPassword);
   await updateDoc(doc(db, 'passwordRequests', requestId), {
     status: 'completed'
+  });
+}
+
+// Admin deletes a Password Request permanently to clear backlog
+export async function deletePasswordRequest(requestId: string): Promise<void> {
+  const reqDocRef = doc(db, 'passwordRequests', requestId);
+  await deleteDoc(reqDocRef);
+}
+
+// User submits Name Change Request (Since name change is restricted to Admin review)
+export async function submitNameChangeRequest(
+  user: UserProfile,
+  requestedName: string,
+  reason = ''
+): Promise<void> {
+  const trimmedName = requestedName.trim();
+  if (!trimmedName) throw new Error('Please enter a valid desired name.');
+
+  const reqId = 'req_name_' + Date.now();
+  const reqDocRef = doc(db, 'nameChangeRequests', reqId);
+
+  const reqData: NameChangeRequest = {
+    id: reqId,
+    userId: user.uid,
+    currentName: user.name,
+    requestedName: trimmedName,
+    userChatCode: user.chatCode,
+    reason: reason.trim(),
+    status: 'pending',
+    createdAt: Date.now()
+  };
+
+  await setDoc(reqDocRef, reqData);
+}
+
+// Listen to Name Change Requests (Admin)
+export function subscribeToNameChangeRequests(
+  onUpdate: (requests: NameChangeRequest[]) => void
+) {
+  const reqRef = collection(db, 'nameChangeRequests');
+  const q = query(reqRef, orderBy('createdAt', 'desc'));
+
+  return onSnapshot(q, (snapshot) => {
+    const list: NameChangeRequest[] = snapshot.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        userId: data.userId,
+        currentName: data.currentName || 'Unknown',
+        requestedName: data.requestedName || 'Unknown',
+        userChatCode: data.userChatCode || '------',
+        reason: data.reason || '',
+        status: data.status || 'pending',
+        createdAt: data.createdAt || Date.now()
+      };
+    });
+    onUpdate(list);
+  });
+}
+
+// Admin approves Name Change Request and updates user's profile name
+export async function approveNameChangeRequest(
+  requestId: string,
+  userId: string,
+  newName: string
+): Promise<void> {
+  await adminUpdateUserName(userId, newName);
+  await updateDoc(doc(db, 'nameChangeRequests', requestId), {
+    status: 'approved'
+  });
+}
+
+// Admin rejects Name Change Request
+export async function rejectNameChangeRequest(requestId: string): Promise<void> {
+  await updateDoc(doc(db, 'nameChangeRequests', requestId), {
+    status: 'rejected'
+  });
+}
+
+// Admin deletes Name Change Request
+export async function deleteNameChangeRequest(requestId: string): Promise<void> {
+  const reqDocRef = doc(db, 'nameChangeRequests', requestId);
+  await deleteDoc(reqDocRef);
+}
+
+// Admin deletes a Group Request permanently to clear backlog
+export async function deleteGroupRequest(requestId: string): Promise<void> {
+  const reqDocRef = doc(db, 'groupRequests', requestId);
+  await deleteDoc(reqDocRef);
+}
+
+// Emergency Lockdown Mode (Sole Kailash Control)
+export async function setEmergencyLockdownMode(enabled: boolean): Promise<void> {
+  const settingsRef = doc(db, 'systemSettings', 'global');
+  await setDoc(
+    settingsRef,
+    {
+      emergencyLockdown: enabled,
+      updatedAt: Date.now()
+    },
+    { merge: true }
+  );
+}
+
+// Subscribe to Emergency Mode
+export function subscribeToEmergencyMode(onUpdate: (enabled: boolean) => void) {
+  const settingsRef = doc(db, 'systemSettings', 'global');
+  return onSnapshot(settingsRef, (snapshot) => {
+    if (snapshot.exists()) {
+      onUpdate(Boolean(snapshot.data()?.emergencyLockdown));
+    } else {
+      onUpdate(false);
+    }
   });
 }

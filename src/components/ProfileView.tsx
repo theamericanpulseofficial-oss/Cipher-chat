@@ -31,8 +31,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useToast } from './Toast';
 import { formatChatCodeDisplay } from '../services/chatService';
 import { updateUserProfile } from '../services/authService';
-import { submitPasswordResetRequest } from '../services/adminService';
-import { UserAvatar } from './UserAvatar';
+import { submitPasswordResetRequest, submitNameChangeRequest } from '../services/adminService';
+import { UserAvatar, VerifiedBadge } from './UserAvatar';
 import { PRESET_AVATARS } from '../utils/imageUtils';
 import { ImageCropperModal } from './ImageCropperModal';
 
@@ -77,6 +77,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [passwordReqReason, setPasswordReqReason] = useState('');
   const [isSubmittingPasswordReq, setIsSubmittingPasswordReq] = useState(false);
 
+  // Request Name Change Modal
+  const [showNameChangeModal, setShowNameChangeModal] = useState(false);
+  const [requestedName, setRequestedName] = useState('');
+  const [nameChangeReason, setNameChangeReason] = useState('');
+  const [isSubmittingNameReq, setIsSubmittingNameReq] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Secret Triple-Click on "Account Profile & Settings" / "Setting"
@@ -88,10 +94,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       const nextCount = clickCount + 1;
       setClickCount(nextCount);
       if (nextCount >= 3) {
-        setShowAdminAuthModal(true);
         setClickCount(0);
-        setAdminPassInput('');
-        setAdminAuthError(false);
+        // Security check: Only account named 'Kailash' (case-insensitive) can access Master Admin
+        const normalizedName = (user.name || '').trim().toLowerCase();
+        if (normalizedName === 'kailash') {
+          setShowAdminAuthModal(true);
+          setAdminPassInput('');
+          setAdminAuthError(false);
+        } else {
+          showToast('Access Denied: Only user "Kailash" is permitted to access the Master Admin Control. (Not Allowed)', 'error');
+        }
       }
     }
     lastClickTimeRef.current = now;
@@ -199,30 +211,47 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  // Save Name & Bio
+  // Save Bio & Status
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      showToast('Name cannot be empty', 'error');
-      return;
-    }
 
     setIsSaving(true);
     try {
       await updateUserProfile(user.uid, {
-        name: name.trim(),
         bio: bio.trim()
       });
-      user.name = name.trim();
       user.bio = bio.trim();
-      onProfileUpdated?.({ name: name.trim(), bio: bio.trim() });
-      showToast('Profile details saved successfully!', 'success');
+      onProfileUpdated?.({ bio: bio.trim() });
+      showToast('Profile bio updated successfully!', 'success');
     } catch (err: unknown) {
       console.error(err);
       const msg = err instanceof Error ? err.message : 'Failed to save profile changes.';
       showToast(msg, 'error');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Submit Name Change Request
+  const handleSubmitNameChangeRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requestedName.trim()) {
+      showToast('Please enter your desired new name', 'error');
+      return;
+    }
+
+    setIsSubmittingNameReq(true);
+    try {
+      await submitNameChangeRequest(user, requestedName, nameChangeReason);
+      showToast('Name change request submitted to Admin successfully!', 'success');
+      setShowNameChangeModal(false);
+      setRequestedName('');
+      setNameChangeReason('');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to submit name change request', 'error');
+    } finally {
+      setIsSubmittingNameReq(false);
     }
   };
 
@@ -466,19 +495,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <div className="flex-1 text-center sm:text-left space-y-3 min-w-0">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h3 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white truncate">
-                  {user.name}
-                </h3>
+                <div className="flex items-center justify-center sm:justify-start gap-1.5 flex-wrap">
+                  <h3 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white truncate">
+                    {user.name}
+                  </h3>
+                  {user.isVerified && <VerifiedBadge size="md" />}
+                </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-center sm:justify-start gap-1.5 mt-0.5">
                   <Calendar size={13} />
                   <span>Member since {memberSince}</span>
                 </p>
               </div>
 
-              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center gap-1.5 self-center sm:self-auto">
-                <Shield size={12} />
-                <span>Verified Account</span>
-              </span>
+              {user.isVerified && (
+                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800 flex items-center justify-center gap-1.5 self-center sm:self-auto">
+                  <VerifiedBadge size="sm" />
+                  <span>Verified Account</span>
+                </span>
+              )}
             </div>
 
             {/* Photo Action Buttons */}
@@ -524,18 +558,38 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <form onSubmit={handleSaveProfile} className="pt-4 border-t border-slate-100 dark:border-slate-800/80 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
-                Display Name
-              </label>
-              <input
-                type="text"
-                id="input-profile-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className={`w-full px-3.5 py-2.5 rounded-xl border ${theme.inputBg} ${theme.inputBorder} text-sm font-medium`}
-                placeholder="Enter your display name"
-                required
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Display Name
+                </label>
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                  <Lock size={11} /> Admin Request Only
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  id="input-profile-name"
+                  value={user.name}
+                  disabled
+                  className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900/80 text-sm font-semibold text-slate-800 dark:text-slate-200 cursor-not-allowed"
+                  placeholder="Your display name"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRequestedName('');
+                    setNameChangeReason('');
+                    setShowNameChangeModal(true);
+                  }}
+                  className="px-3.5 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 text-xs font-bold transition-all cursor-pointer shrink-0"
+                >
+                  Request Change
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                Name changes require administrator review and approval.
+              </p>
             </div>
 
             <div>
@@ -811,6 +865,176 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Name Change Request Modal */}
+      {showNameChangeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <UserIcon size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Request Name Change
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Submit a new display name for Admin approval
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNameChangeModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitNameChangeRequest} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">
+                  Current Name
+                </label>
+                <input
+                  type="text"
+                  value={user.name}
+                  disabled
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 text-sm font-medium text-slate-500 cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Desired New Name *
+                </label>
+                <input
+                  type="text"
+                  value={requestedName}
+                  onChange={(e) => setRequestedName(e.target.value)}
+                  placeholder="e.g. Kailash Kumar"
+                  required
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Reason for Request (Optional)
+                </label>
+                <textarea
+                  value={nameChangeReason}
+                  onChange={(e) => setNameChangeReason(e.target.value)}
+                  placeholder="Explain why you would like to change your display name..."
+                  rows={3}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-hidden resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNameChangeModal(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingNameReq || !requestedName.trim()}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs disabled:opacity-60 cursor-pointer"
+                >
+                  {isSubmittingNameReq ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  <span>Submit Request</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Password Reset Request Modal */}
+      {showPasswordReqModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#181b24] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                  <KeyRound size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Request Password Change
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Send password reset request to administrator
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPasswordReqModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitPasswordRequest} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">
+                  Your Account
+                </label>
+                <p className="text-xs font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                  {user.name} ({formatChatCodeDisplay(user.chatCode)})
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Reason for Password Change (Optional)
+                </label>
+                <textarea
+                  value={passwordReqReason}
+                  onChange={(e) => setPasswordReqReason(e.target.value)}
+                  placeholder="e.g. Forgot old password or security routine..."
+                  rows={3}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-hidden resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordReqModal(false)}
+                  className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPasswordReq}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs disabled:opacity-60 cursor-pointer"
+                >
+                  {isSubmittingPasswordReq ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  <span>Submit Request</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, Zap, Cpu, Lock, Terminal, Orbit, Compass } from 'lucide-react';
+import { Shield, Zap, Cpu, Lock, Terminal, Orbit, Compass, Check, Users } from 'lucide-react';
 
 interface UserAvatarProps {
   name: string;
@@ -10,6 +10,59 @@ interface UserAvatarProps {
   showOnlineStatus?: boolean;
   isOnline?: boolean;
 }
+
+export const VerifiedBadge: React.FC<{ size?: 'sm' | 'md' | 'lg'; className?: string }> = ({
+  size = 'md',
+  className = ''
+}) => {
+  const sizeMap = {
+    sm: 'w-3.5 h-3.5 min-w-[14px]',
+    md: 'w-4 h-4 min-w-[16px]',
+    lg: 'w-5 h-5 min-w-[20px]'
+  };
+  const iconSizeMap = {
+    sm: 9,
+    md: 10,
+    lg: 13
+  };
+
+  return (
+    <span
+      className={`inline-flex items-center justify-center rounded-full bg-sky-500 text-white shadow-2xs shrink-0 select-none ${sizeMap[size]} ${className}`}
+      title="Verified Blue Tick"
+      aria-label="Verified Account"
+    >
+      <Check size={iconSizeMap[size]} strokeWidth={3.5} className="text-white" />
+    </span>
+  );
+};
+
+export const GroupAvatar: React.FC<{
+  name?: string;
+  photoURL?: string;
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+}> = ({ size = 'md' }) => {
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-xs',
+    md: 'w-10 h-10 text-sm',
+    lg: 'w-12 h-12 text-base',
+    xl: 'w-16 h-16 text-xl',
+    '2xl': 'w-24 h-24 text-3xl'
+  };
+  const iconSizes = {
+    sm: 15,
+    md: 20,
+    lg: 24,
+    xl: 32,
+    '2xl': 48
+  };
+
+  return (
+    <div className={`${sizeClasses[size]} rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-800 flex items-center justify-center text-white shadow-inner shrink-0 select-none border border-indigo-400/20`}>
+      <Users size={iconSizes[size]} className="text-white/95" />
+    </div>
+  );
+};
 
 export const UserAvatar: React.FC<UserAvatarProps> = ({
   name,
