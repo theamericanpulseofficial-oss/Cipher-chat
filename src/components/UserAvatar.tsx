@@ -9,30 +9,58 @@ interface UserAvatarProps {
   size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   showOnlineStatus?: boolean;
   isOnline?: boolean;
+  isVerified?: boolean;
 }
 
-export const VerifiedBadge: React.FC<{ size?: 'sm' | 'md' | 'lg'; className?: string }> = ({
-  size = 'md',
-  className = ''
-}) => {
-  const sizeMap = {
-    sm: 'w-3.5 h-3.5 min-w-[14px]',
-    md: 'w-4 h-4 min-w-[16px]',
-    lg: 'w-5 h-5 min-w-[20px]'
-  };
-  const iconSizeMap = {
-    sm: 9,
-    md: 10,
-    lg: 13
-  };
+export const VERIFIED_BADGE_IMAGE_URL =
+  'https://cdn.phototourl.com/free/2026-08-03-5734f1ec-8c0c-4046-a301-9496861cf40f.jpg';
+
+export const VerifiedBadge: React.FC<{
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | number;
+  className?: string;
+}> = ({ size = 'md', className = '' }) => {
+  let dimensionPx = 22;
+  if (typeof size === 'number') {
+    // Scale up numeric sizes so the custom badge is clearly visible and prominent
+    dimensionPx = Math.max(Math.round(size * 1.3), size + 4);
+  } else {
+    switch (size) {
+      case 'xs':
+        dimensionPx = 16;
+        break;
+      case 'sm':
+        dimensionPx = 20;
+        break;
+      case 'md':
+        dimensionPx = 24;
+        break;
+      case 'lg':
+        dimensionPx = 30;
+        break;
+      case 'xl':
+        dimensionPx = 36;
+        break;
+      default:
+        dimensionPx = 24;
+    }
+  }
 
   return (
     <span
-      className={`inline-flex items-center justify-center rounded-full bg-sky-500 text-white shadow-2xs shrink-0 select-none ${sizeMap[size]} ${className}`}
-      title="Verified Blue Tick"
+      className={`inline-flex items-center justify-center shrink-0 select-none align-middle ${className}`}
+      title="Verified Badge"
       aria-label="Verified Account"
     >
-      <Check size={iconSizeMap[size]} strokeWidth={3.5} className="text-white" />
+      <img
+        src={VERIFIED_BADGE_IMAGE_URL}
+        alt="Verified Badge"
+        width={dimensionPx}
+        height={dimensionPx}
+        style={{ width: `${dimensionPx}px`, height: `${dimensionPx}px`, minWidth: `${dimensionPx}px` }}
+        className="object-contain inline-block shrink-0 rounded-full drop-shadow-xs"
+        referrerPolicy="no-referrer"
+        loading="eager"
+      />
     </span>
   );
 };

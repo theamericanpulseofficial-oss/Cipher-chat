@@ -1593,7 +1593,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onE
                                   <button
                                     type="button"
                                     onClick={() => handleToggleVerified(u)}
-                                    title={u.isVerified ? 'Remove Verified Blue Tick' : 'Grant Verified Blue Tick'}
+                                    title={u.isVerified ? 'Remove Verified Badge' : 'Grant Verified Badge'}
                                     className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
                                       u.isVerified
                                         ? 'bg-sky-950/80 text-sky-400 border border-sky-800 hover:bg-sky-900/80'
